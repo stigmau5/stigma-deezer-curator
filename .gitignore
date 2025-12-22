@@ -1,10 +1,10 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 
 # Virtual environments
 .venv/
 
 # App data (personal)
 data/
-
