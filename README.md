@@ -1,3 +1,4 @@
+<img width="1919" height="1039" alt="Skärmbild från 2025-12-23 17-37-29" src="https://github.com/user-attachments/assets/fff446c8-59f5-4963-bc17-b80f11893655" />
 # STiGMA Deezer Curator
 
 STiGMA Deezer Curator is a small, personal Python tool for **curating Deezer links** and handing them off cleanly to **streamrip**.
