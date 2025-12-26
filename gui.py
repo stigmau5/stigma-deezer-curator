@@ -5,13 +5,15 @@ from datetime import datetime
 import subprocess
 import json
 import re
+import threading
 
 from curator.curate import run_curation
-from curator.write import write_by_artist
 
-# ---------------- Paths ----------------
+# ---------------- Base paths ----------------
 
-DATA_DIR = Path("data")
+BASE_DIR = Path(__file__).resolve().parent
+
+DATA_DIR = BASE_DIR / "data"
 INBOX = DATA_DIR / "inbox.txt"
 LOG = DATA_DIR / "curated.log"
 ARTISTS_DIR = DATA_DIR / "artists"
@@ -21,12 +23,11 @@ META_FILE = DATA_DIR / "artist_meta.json"
 STREAMRIP_BIN = Path(
     "/home/stigma/Dokument/projekt/streamrip/.venv/bin/rip"
 )
-
 STREAMRIP_QUEUE = Path(
     "/home/stigma/Dokument/projekt/streamrip/download_que.txt"
 )
 
-# ---------------- Metadata ----------------
+# ---------------- Metadata helpers ----------------
 
 
 def load_meta():
@@ -56,13 +57,18 @@ class DeezerCuratorGUI(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("STiGMA Deezer Curator — v0.1")
+        self.title("STiGMA Deezer Curator — v0.3")
         self.geometry("1400x700")
 
         self.main_mode = "artist"  # artist | inbox
         self.sort_mode = "alphabetical"
 
+        # Grep toggles
+        self.include_live = tk.BooleanVar(value=True)
+        self.include_compilations = tk.BooleanVar(value=True)
+
         self._build_layout()
+
         self.refresh_artists()
         self.load_inbox()
         self.load_custom_queue()
@@ -92,12 +98,6 @@ class DeezerCuratorGUI(tk.Tk):
         self.artist_list = tk.Listbox(left)
         self.artist_list.pack(fill="both", expand=True)
         self.artist_list.bind("<<ListboxSelect>>", self.open_selected_artist)
-
-        self.artist_menu = tk.Menu(self, tearoff=0)
-        self.artist_menu.add_command(
-            label="Delete artist", command=self.delete_selected_artist
-        )
-        self.artist_list.bind("<Button-3>", self.show_artist_menu)
 
         # ===== CENTER: Main editor =====
         center = ttk.Frame(main, padding=6)
@@ -133,17 +133,58 @@ class DeezerCuratorGUI(tk.Tk):
 
         ttk.Button(
             bottom,
-            text="Send selected link(s) to queue",
+            text="Send selected link(s)",
             command=self.send_selected_link_to_queue,
         ).pack(side="left", padx=8)
 
-        ttk.Button(
-            bottom, text="Send to streamrip", command=self.send_to_streamrip
-        ).pack(side="left", padx=12)
+        ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
 
         ttk.Button(
-            bottom, text="Run Curator (Inbox)", command=self.run_from_inbox
-        ).pack(side="left", padx=12)
+            bottom,
+            text="Send Albums",
+            command=lambda: self.grep_section("Albums"),
+        ).pack(side="left", padx=2)
+
+        ttk.Button(
+            bottom,
+            text="Send EPs",
+            command=lambda: self.grep_section("EPs"),
+        ).pack(side="left", padx=2)
+
+        ttk.Button(
+            bottom,
+            text="Send Singles",
+            command=lambda: self.grep_section("Singles"),
+        ).pack(side="left", padx=2)
+
+        ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
+
+        ttk.Checkbutton(
+            bottom,
+            text="Include Live",
+            variable=self.include_live,
+        ).pack(side="left")
+
+        ttk.Checkbutton(
+            bottom,
+            text="Include Compilations",
+            variable=self.include_compilations,
+        ).pack(side="left")
+
+        ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
+
+        self.run_button = ttk.Button(
+            bottom,
+            text="Run Curator (Inbox)",
+            command=self.run_from_inbox,
+        )
+        self.run_button.pack(side="left", padx=8)
+
+        ttk.Button(
+            bottom,
+            text="Send to streamrip",
+            command=self.send_to_streamrip,
+        ).pack(side="left", padx=8)
 
         self.status = ttk.Label(bottom, text="Idle")
         self.status.pack(side="right")
@@ -173,14 +214,12 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_mode = "artist"
         self.main_label.config(text="Artist file")
         self.main_editor.config(state="disabled")
-        self.status.config(text="Artist mode")
 
     def show_inbox_mode(self):
         self.main_mode = "inbox"
-        self.main_label.config(text="Inbox (data/inbox.txt)")
+        self.main_label.config(text="Inbox")
         self.main_editor.config(state="normal")
         self.load_inbox()
-        self.status.config(text="Inbox mode")
 
     # ---------------- Artist ----------------
 
@@ -203,47 +242,11 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_editor.config(state="normal")
         self.main_editor.delete("1.0", tk.END)
 
-        try:
+        if path.exists():
             self.main_editor.insert(tk.END, path.read_text(encoding="utf-8"))
             record_created(filename)
-            self.status.config(text=f"Viewing {filename}")
-        except Exception as exc:
-            messagebox.showerror("Error", str(exc))
 
         self.main_editor.config(state="disabled")
-
-    def show_artist_menu(self, event):
-        index = self.artist_list.nearest(event.y)
-        self.artist_list.selection_clear(0, tk.END)
-        self.artist_list.selection_set(index)
-        self.artist_menu.tk_popup(event.x_root, event.y_root)
-
-    def delete_selected_artist(self):
-        selection = self.artist_list.curselection()
-        if not selection:
-            return
-
-        filename = self.artist_list.get(selection[0])
-        path = ARTISTS_DIR / filename
-
-        if not messagebox.askyesno(
-            "Delete artist",
-            f"Delete artist file?\n\n{filename}\n\nThis cannot be undone.",
-        ):
-            return
-
-        path.unlink(missing_ok=True)
-
-        meta = load_meta()
-        meta["created"].pop(filename, None)
-        save_meta(meta)
-
-        self.main_editor.config(state="normal")
-        self.main_editor.delete("1.0", tk.END)
-        self.main_editor.config(state="disabled")
-
-        self.refresh_artists()
-        self.status.config(text=f"Deleted {filename}")
 
     # ---------------- Inbox ----------------
 
@@ -257,127 +260,148 @@ class DeezerCuratorGUI(tk.Tk):
             return
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         INBOX.write_text(self.main_editor.get("1.0", tk.END), encoding="utf-8")
-        self.status.config(text="Inbox saved")
+
+    # ---------------- Grep helpers ----------------
+
+    def grep_section(self, section_name: str):
+        if self.main_mode != "artist":
+            messagebox.showwarning("No artist selected", "Open an artist file first.")
+            return
+
+        lines = self.main_editor.get("1.0", tk.END).splitlines()
+
+        collecting = False
+        found = []
+
+        header = f"# {section_name}"
+
+        for line in lines:
+            line = line.rstrip()
+
+            if line.startswith("# "):
+                collecting = line == header
+                continue
+
+            if not collecting:
+                continue
+
+            if not line.startswith("http"):
+                continue
+
+            if not self.include_live.get() and "LIVE?" in line:
+                continue
+
+            if not self.include_compilations.get() and "COMPILATION" in line:
+                continue
+
+            found.append(line)
+
+        if not found:
+            messagebox.showinfo(
+                "No matches",
+                f"No matching links found in section '{section_name}'.",
+            )
+            return
+
+        for url in found:
+            self.custom_editor.insert(tk.END, url + "\n")
+
+        self.status.config(
+            text=f"Added {len(found)} {section_name} link(s) to queue"
+        )
 
     # ---------------- Queue helpers ----------------
 
     def send_selected_link_to_queue(self):
         if self.main_mode != "artist":
-            messagebox.showwarning(
-                "Not in artist view",
-                "Switch to an artist file to send links to the queue.",
-            )
             return
 
         try:
             text = self.main_editor.get(tk.SEL_FIRST, tk.SEL_LAST)
         except tk.TclError:
             index = self.main_editor.index(tk.INSERT)
-            line_start = f"{index.split('.')[0]}.0"
-            line_end = f"{index.split('.')[0]}.end"
-            text = self.main_editor.get(line_start, line_end)
+            text = self.main_editor.get(
+                f"{index.split('.')[0]}.0", f"{index.split('.')[0]}.end"
+            )
 
         links = re.findall(
             r"https://www\.deezer\.com/(?:[a-z]{2}/)?album/\d+",
             text,
         )
 
-        if not links:
-            messagebox.showwarning(
-                "No links found",
-                "No Deezer album links found in the selection.",
-            )
-            return
-
         for link in links:
             self.custom_editor.insert(tk.END, link + "\n")
-
-        self.status.config(
-            text=f"Added {len(links)} link(s) to streamrip queue"
-        )
 
     def load_custom_queue(self):
         self.custom_editor.delete("1.0", tk.END)
         if STREAMRIP_QUEUE.exists():
-            self.custom_editor.insert(
-                tk.END, STREAMRIP_QUEUE.read_text(encoding="utf-8")
-            )
-
-    def _extract_links(self, text: str) -> list[str]:
-        return [
-            line.strip()
-            for line in text.splitlines()
-            if line.strip().startswith(("http://", "https://"))
-        ]
+            self.custom_editor.insert(tk.END, STREAMRIP_QUEUE.read_text())
 
     def send_to_streamrip(self):
-        if not STREAMRIP_BIN.exists():
-            messagebox.showerror(
-                "Streamrip not found",
-                f"streamrip not found at:\n{STREAMRIP_BIN}",
-            )
-            return
-
         raw_text = self.custom_editor.get("1.0", tk.END)
-        links = self._extract_links(raw_text)
+        links = [
+            line.strip()
+            for line in raw_text.splitlines()
+            if line.strip().startswith("http")
+        ]
 
         if not links:
-            messagebox.showwarning(
-                "No links", "No valid URLs found to send to streamrip."
-            )
             return
 
-        STREAMRIP_QUEUE.write_text("\n".join(links) + "\n", encoding="utf-8")
+        STREAMRIP_QUEUE.write_text("\n".join(links) + "\n")
 
         SHIPPED_DIR.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        archive_name = f"{timestamp}_{len(links)}links_download_que.txt"
-        archive_path = SHIPPED_DIR / archive_name
-        archive_path.write_text("\n".join(links) + "\n", encoding="utf-8")
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        archive = SHIPPED_DIR / f"{ts}_{len(links)}links_download_que.txt"
+        archive.write_text("\n".join(links) + "\n")
 
         subprocess.Popen(
-            [
-                "x-terminal-emulator",
-                "-e",
-                str(STREAMRIP_BIN),
-                "file",
-                str(STREAMRIP_QUEUE),
-            ]
+            ["x-terminal-emulator", "-e", str(STREAMRIP_BIN), "file", str(STREAMRIP_QUEUE)]
         )
 
-        self.status.config(
-            text=f"Sent {len(links)} links • archived as {archive_name}"
-        )
-
-    # ---------------- Curator ----------------
-
-    def _run_curator(self, inbox_path: Path, source_name: str):
-        self.status.config(text=f"Running curator from {source_name}…")
-        self.update_idletasks()
-
-        album_links = run_curation(inbox_path=inbox_path, log_path=LOG)
-        total = len(album_links)
-
-        for idx, url in enumerate(album_links, start=1):
-            short = url.rsplit("/", 1)[-1]
-            self.status.config(
-                text=f"Processing {idx}/{total}: album/{short}"
-            )
-            self.update_idletasks()
-            write_by_artist([url], ARTISTS_DIR)
-
-        self.refresh_artists()
-        self.status.config(text="Done")
-
-        messagebox.showinfo(
-            "Done",
-            f"Curator finished.\n\nSource: {source_name}\nAlbums written: {total}",
-        )
+    # ---------------- Curator (threaded) ----------------
 
     def run_from_inbox(self):
-        self.show_inbox_mode()
-        self.save_inbox()
-        self._run_curator(INBOX, "Inbox")
+        self.run_button.config(state="disabled")
+        self.status.config(text="Running curator…")
+
+        thread = threading.Thread(
+            target=self._run_curator_thread,
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_curator_thread(self):
+        try:
+            self.show_inbox_mode()
+            self.save_inbox()
+
+            result = run_curation(
+                inbox_path=INBOX,
+                log_path=LOG,
+                artists_dir=ARTISTS_DIR,
+            )
+
+            stats = result["stats"]
+
+            self.after(
+                0,
+                lambda: messagebox.showinfo(
+                    "Done",
+                    (
+                        "Curator finished.\n\n"
+                        f'Albums passed: {stats["albums_passed"]}\n'
+                        f'Artists expanded: {stats["artists_expanded"]}\n'
+                        f'Artists skipped: {stats["artists_skipped"]}'
+                    ),
+                ),
+            )
+
+            self.after(0, self.refresh_artists)
+
+        finally:
+            self.after(0, lambda: self.run_button.config(state="normal"))
+            self.after(0, lambda: self.status.config(text="Idle"))
 
 
 def main():

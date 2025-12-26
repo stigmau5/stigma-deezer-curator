@@ -16,10 +16,17 @@ class DeezerLink:
     id: str | None
 
 
+# Optional locale prefix like /en/, /se/, /fr/
+_LOCALE = r"(?:/[a-z]{2})?"
+
+ALBUM_RE = re.compile(rf"{_LOCALE}/album/(\d+)")
+ARTIST_RE = re.compile(rf"{_LOCALE}/artist/(\d+)")
+
+
 def parse_deezer_link(url: str) -> DeezerLink:
     url = url.strip()
 
-    album_match = re.search(r"/album/(\d+)", url)
+    album_match = ALBUM_RE.search(url)
     if album_match:
         return DeezerLink(
             raw=url,
@@ -27,7 +34,7 @@ def parse_deezer_link(url: str) -> DeezerLink:
             id=album_match.group(1),
         )
 
-    artist_match = re.search(r"/artist/(\d+)", url)
+    artist_match = ARTIST_RE.search(url)
     if artist_match:
         return DeezerLink(
             raw=url,
