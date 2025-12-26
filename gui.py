@@ -57,7 +57,7 @@ class DeezerCuratorGUI(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("STiGMA Deezer Curator — v0.3")
+        self.title("STiGMA Deezer Curator — v0.3.1")
         self.geometry("1400x700")
 
         self.main_mode = "artist"  # artist | inbox
@@ -68,7 +68,6 @@ class DeezerCuratorGUI(tk.Tk):
         self.include_compilations = tk.BooleanVar(value=True)
 
         self._build_layout()
-
         self.refresh_artists()
         self.load_inbox()
         self.load_custom_queue()
@@ -79,7 +78,7 @@ class DeezerCuratorGUI(tk.Tk):
         main = ttk.Panedwindow(self, orient="horizontal")
         main.pack(fill="both", expand=True)
 
-        # ===== LEFT: Artist list =====
+        # ===== LEFT =====
         left = ttk.Frame(main, padding=6)
         main.add(left, weight=1)
 
@@ -99,7 +98,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.artist_list.pack(fill="both", expand=True)
         self.artist_list.bind("<<ListboxSelect>>", self.open_selected_artist)
 
-        # ===== CENTER: Main editor =====
+        # ===== CENTER =====
         center = ttk.Frame(main, padding=6)
         main.add(center, weight=2)
 
@@ -109,7 +108,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_editor = tk.Text(center, wrap="none")
         self.main_editor.pack(fill="both", expand=True)
 
-        # ===== RIGHT: Streamrip queue =====
+        # ===== RIGHT =====
         right = ttk.Frame(main, padding=6)
         main.add(right, weight=2)
 
@@ -117,7 +116,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.custom_editor = tk.Text(right, wrap="none")
         self.custom_editor.pack(fill="both", expand=True)
 
-        # ===== Bottom bar =====
+        # ===== BOTTOM =====
         bottom = ttk.Frame(self, padding=8)
         bottom.pack(fill="x")
 
@@ -140,50 +139,33 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
 
         ttk.Button(
-            bottom,
-            text="Send Albums",
-            command=lambda: self.grep_section("Albums"),
+            bottom, text="Send Albums", command=lambda: self.grep_section("Albums")
         ).pack(side="left", padx=2)
-
         ttk.Button(
-            bottom,
-            text="Send EPs",
-            command=lambda: self.grep_section("EPs"),
+            bottom, text="Send EPs", command=lambda: self.grep_section("EPs")
         ).pack(side="left", padx=2)
-
         ttk.Button(
-            bottom,
-            text="Send Singles",
-            command=lambda: self.grep_section("Singles"),
+            bottom, text="Send Singles", command=lambda: self.grep_section("Singles")
         ).pack(side="left", padx=2)
 
         ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
 
         ttk.Checkbutton(
-            bottom,
-            text="Include Live",
-            variable=self.include_live,
+            bottom, text="Include Live", variable=self.include_live
         ).pack(side="left")
-
         ttk.Checkbutton(
-            bottom,
-            text="Include Compilations",
-            variable=self.include_compilations,
+            bottom, text="Include Compilations", variable=self.include_compilations
         ).pack(side="left")
 
         ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
 
         self.run_button = ttk.Button(
-            bottom,
-            text="Run Curator (Inbox)",
-            command=self.run_from_inbox,
+            bottom, text="Run Curator (Inbox)", command=self.run_from_inbox
         )
         self.run_button.pack(side="left", padx=8)
 
         ttk.Button(
-            bottom,
-            text="Send to streamrip",
-            command=self.send_to_streamrip,
+            bottom, text="Send to streamrip", command=self.send_to_streamrip
         ).pack(side="left", padx=8)
 
         self.status = ttk.Label(bottom, text="Idle")
@@ -202,10 +184,8 @@ class DeezerCuratorGUI(tk.Tk):
     def get_sorted_artists(self):
         files = [p.name for p in ARTISTS_DIR.glob("*.txt")]
         meta = load_meta()["created"]
-
         if self.sort_mode == "last_added":
             return sorted(files, key=lambda f: meta.get(f, ""), reverse=True)
-
         return sorted(files)
 
     # ---------------- Modes ----------------
@@ -226,7 +206,6 @@ class DeezerCuratorGUI(tk.Tk):
     def refresh_artists(self):
         ARTISTS_DIR.mkdir(parents=True, exist_ok=True)
         self.artist_list.delete(0, tk.END)
-
         for name in self.get_sorted_artists():
             self.artist_list.insert(tk.END, name)
 
@@ -269,7 +248,6 @@ class DeezerCuratorGUI(tk.Tk):
             return
 
         lines = self.main_editor.get("1.0", tk.END).splitlines()
-
         collecting = False
         found = []
 
@@ -282,10 +260,7 @@ class DeezerCuratorGUI(tk.Tk):
                 collecting = line == header
                 continue
 
-            if not collecting:
-                continue
-
-            if not line.startswith("http"):
+            if not collecting or not line.startswith("http"):
                 continue
 
             if not self.include_live.get() and "LIVE?" in line:
@@ -298,17 +273,14 @@ class DeezerCuratorGUI(tk.Tk):
 
         if not found:
             messagebox.showinfo(
-                "No matches",
-                f"No matching links found in section '{section_name}'.",
+                "No matches", f"No matching links in section '{section_name}'."
             )
             return
 
-        for url in found:
-            self.custom_editor.insert(tk.END, url + "\n")
+        for entry in found:
+            self.custom_editor.insert(tk.END, entry + "\n")
 
-        self.status.config(
-            text=f"Added {len(found)} {section_name} link(s) to queue"
-        )
+        self.status.config(text=f"Added {len(found)} {section_name} link(s)")
 
     # ---------------- Queue helpers ----------------
 
@@ -324,13 +296,9 @@ class DeezerCuratorGUI(tk.Tk):
                 f"{index.split('.')[0]}.0", f"{index.split('.')[0]}.end"
             )
 
-        links = re.findall(
-            r"https://www\.deezer\.com/(?:[a-z]{2}/)?album/\d+",
-            text,
-        )
-
-        for link in links:
-            self.custom_editor.insert(tk.END, link + "\n")
+        for line in text.splitlines():
+            if line.strip().startswith("http"):
+                self.custom_editor.insert(tk.END, line.strip() + "\n")
 
     def load_custom_queue(self):
         self.custom_editor.delete("1.0", tk.END)
@@ -339,24 +307,39 @@ class DeezerCuratorGUI(tk.Tk):
 
     def send_to_streamrip(self):
         raw_text = self.custom_editor.get("1.0", tk.END)
-        links = [
-            line.strip()
-            for line in raw_text.splitlines()
-            if line.strip().startswith("http")
-        ]
+
+        links = []
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line.startswith("http"):
+                continue
+            links.append(line.split()[0])
 
         if not links:
+            messagebox.showwarning(
+                "No links", "No valid URLs found to send to streamrip."
+            )
             return
 
-        STREAMRIP_QUEUE.write_text("\n".join(links) + "\n")
+        STREAMRIP_QUEUE.write_text("\n".join(links) + "\n", encoding="utf-8")
 
         SHIPPED_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
         archive = SHIPPED_DIR / f"{ts}_{len(links)}links_download_que.txt"
-        archive.write_text("\n".join(links) + "\n")
+        archive.write_text("\n".join(links) + "\n", encoding="utf-8")
 
         subprocess.Popen(
-            ["x-terminal-emulator", "-e", str(STREAMRIP_BIN), "file", str(STREAMRIP_QUEUE)]
+            [
+                "x-terminal-emulator",
+                "-e",
+                str(STREAMRIP_BIN),
+                "file",
+                str(STREAMRIP_QUEUE),
+            ]
+        )
+
+        self.status.config(
+            text=f"Sent {len(links)} links • archived as {archive.name}"
         )
 
     # ---------------- Curator (threaded) ----------------
@@ -365,10 +348,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.run_button.config(state="disabled")
         self.status.config(text="Running curator…")
 
-        thread = threading.Thread(
-            target=self._run_curator_thread,
-            daemon=True,
-        )
+        thread = threading.Thread(target=self._run_curator_thread, daemon=True)
         thread.start()
 
     def _run_curator_thread(self):
@@ -376,12 +356,7 @@ class DeezerCuratorGUI(tk.Tk):
             self.show_inbox_mode()
             self.save_inbox()
 
-            result = run_curation(
-                inbox_path=INBOX,
-                log_path=LOG,
-                artists_dir=ARTISTS_DIR,
-            )
-
+            result = run_curation(INBOX, LOG, ARTISTS_DIR)
             stats = result["stats"]
 
             self.after(
@@ -396,9 +371,7 @@ class DeezerCuratorGUI(tk.Tk):
                     ),
                 ),
             )
-
             self.after(0, self.refresh_artists)
-
         finally:
             self.after(0, lambda: self.run_button.config(state="normal"))
             self.after(0, lambda: self.status.config(text="Idle"))
