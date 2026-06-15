@@ -139,7 +139,12 @@ def _merge_rows(
             _add_source(row, source)
 
 
-def build_lifecycle_registry(data_dir: Path, *, generated_at: str | None = None) -> dict[str, Any]:
+def build_lifecycle_registry(
+    data_dir: Path,
+    *,
+    generated_at: str | None = None,
+    validation_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     rows: dict[str, dict[str, Any]] = {}
 
     discovered, artist_counts = read_artist_releases(data_dir / "artists")
@@ -220,7 +225,7 @@ def build_lifecycle_registry(data_dir: Path, *, generated_at: str | None = None)
 
     summary = summarize_registry(albums)
 
-    return {
+    registry = {
         "schema": 1,
         "generated_at": generated_at or datetime.now().isoformat(timespec="seconds"),
         "source_counts": {
@@ -233,6 +238,13 @@ def build_lifecycle_registry(data_dir: Path, *, generated_at: str | None = None)
         "summary": summary,
         "albums": albums,
     }
+
+    if validation_evidence is not None:
+        from curator.validator_evidence import attach_validation_evidence
+
+        attach_validation_evidence(registry, validation_evidence)
+
+    return registry
 
 
 def summarize_registry(albums: list[dict[str, Any]]) -> dict[str, Any]:
