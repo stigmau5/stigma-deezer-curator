@@ -58,6 +58,7 @@ def run_curation(
             continue
 
         link = parse_deezer_link(raw)
+        should_log = True
 
         try:
             if link.type == LinkType.ALBUM:
@@ -81,10 +82,13 @@ def run_curation(
             # UNKNOWN links are intentionally ignored
 
         except Exception as exc:
+            if link.type == LinkType.ARTIST:
+                should_log = False
             print(f"⚠️  Failed to process {raw}: {exc}")
 
         finally:
-            log.append([raw])
+            if should_log:
+                log.append([raw])
 
     return {
         "album_urls": album_urls,
