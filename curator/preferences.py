@@ -5,6 +5,8 @@ from curator.atomic import atomic_write_text
 
 DEFAULTS = {
     "batch_size": 6,
+    "ship_ssh_host": "stigma@stigma-mediaserver",
+    "ship_pending_dir": "/media/storage/streamrip/jobs/pending",
 }
 
 

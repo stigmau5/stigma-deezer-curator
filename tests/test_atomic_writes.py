@@ -7,7 +7,7 @@ from pathlib import Path
 
 from curator.atomic import atomic_write_text
 from curator.attempts import AttemptInfo, load_attempts, save_attempts
-from curator.preferences import load_preferences, save_preferences
+from curator.preferences import DEFAULTS, load_preferences, save_preferences
 from curator.ship import _load_shipped_db, _save_shipped_db
 from curator.state import ConfirmedAlbum, load_confirmed, save_confirmed
 
@@ -101,12 +101,65 @@ class StateWriterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "preferences.json"
 
-            save_preferences(path, {"batch_size": 6})
+            save_preferences(path, DEFAULTS.copy())
             self.assertEqual(load_preferences(path)["batch_size"], 6)
 
-            save_preferences(path, {"batch_size": 20})
+            updated = DEFAULTS.copy()
+            updated["batch_size"] = 20
+            save_preferences(path, updated)
 
             self.assertEqual(load_preferences(path)["batch_size"], 20)
+
+    def test_preferences_defaults_include_shipping_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "missing_preferences.json"
+
+            self.assertEqual(
+                load_preferences(path),
+                {
+                    "batch_size": 6,
+                    "ship_ssh_host": "stigma@stigma-mediaserver",
+                    "ship_pending_dir": "/media/storage/streamrip/jobs/pending",
+                },
+            )
+
+    def test_existing_preferences_keep_shipping_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "preferences.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "batch_size": 20,
+                        "ship_ssh_host": "music@example.local",
+                        "ship_pending_dir": "/srv/streamrip/pending",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_preferences(path),
+                {
+                    "batch_size": 20,
+                    "ship_ssh_host": "music@example.local",
+                    "ship_pending_dir": "/srv/streamrip/pending",
+                },
+            )
+
+    def test_shipping_preferences_survive_save_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "preferences.json"
+            prefs = {
+                "batch_size": 12,
+                "ship_ssh_host": "stigma@test-server",
+                "ship_pending_dir": "/tmp/jobs/pending",
+            }
+
+            save_preferences(path, prefs)
+            reloaded = load_preferences(path)
+
+            self.assertEqual(reloaded, prefs)
 
     def test_shipped_jobs_roundtrip_and_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
