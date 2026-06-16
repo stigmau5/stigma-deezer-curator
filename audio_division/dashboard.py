@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from audio_division.actions import ACTION_CATEGORIES, action_summary, generate_archive_actions
+
 
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -55,6 +57,9 @@ def compute_dashboard_summary(
     validation_coverage = _ratio(validated, total_albums)
 
     archive_strength = _archive_strength_score(total_albums, identity_counts.get("HIGH", 0), validated, metadata_coverage)
+    actions = generate_archive_actions(lifecycle, identity, metadata)
+    actions_summary = action_summary(actions)
+    first_action = actions[0] if actions else {}
 
     return {
         "archive_overview": {
@@ -90,6 +95,12 @@ def compute_dashboard_summary(
             "shipped_not_validated": gaps.get("shipped_not_validated", 0),
             "attempted_not_shipped": max(state_counts.get("ATTEMPTED", 0) - state_counts.get("SHIPPED", 0), 0),
             "confirmed_not_validated": gaps.get("confirmed_not_validated", 0),
+        },
+        "archive_actions": {
+            "action_count": actions_summary["total_actions"],
+            **{category: actions_summary["by_category"].get(category, 0) for category in ACTION_CATEGORIES},
+            "selected_action": first_action,
+            "actions": actions,
         },
     }
 

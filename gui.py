@@ -76,6 +76,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
         self.dashboard_value_labels: dict[str, ttk.Label] = {}
+        self.action_detail = None
 
         self._build_layout()
         self.refresh_artists()
@@ -239,6 +240,15 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_health.attempted_not_shipped", "Attempted Not Shipped"),
                 ("archive_health.confirmed_not_validated", "Confirmed Not Validated"),
             ]),
+            ("Archive Actions", [
+                ("archive_actions.action_count", "Action Count"),
+                ("archive_actions.missing_nfo", "Missing NFO"),
+                ("archive_actions.missing_sfv", "Missing SFV"),
+                ("archive_actions.missing_validation", "Missing Validation"),
+                ("archive_actions.missing_metadata", "Missing Metadata"),
+                ("archive_actions.missing_artwork", "Missing Artwork"),
+                ("archive_actions.identity_review", "Identity Review"),
+            ]),
         ]
 
         for idx, (title, fields) in enumerate(sections):
@@ -252,6 +262,12 @@ class DeezerCuratorGUI(tk.Tk):
                 value.grid(row=row, column=1, sticky="e", pady=2)
                 frame.columnconfigure(1, weight=1)
                 self.dashboard_value_labels[key] = value
+
+        details = ttk.LabelFrame(parent, text="Action Details", padding=8)
+        details.pack(fill="x", pady=(10, 0))
+        self.action_detail = tk.Text(details, height=4, wrap="word")
+        self.action_detail.pack(fill="x")
+        self.action_detail.config(state="disabled")
 
         self.refresh_audio_dashboard()
 
@@ -286,6 +302,18 @@ class DeezerCuratorGUI(tk.Tk):
             section, field = key.split(".", 1)
             value = summary.get(section, {}).get(field, 0)
             label.config(text=f"{value:.1%}" if isinstance(value, float) else str(value))
+        action = summary.get("archive_actions", {}).get("selected_action", {})
+        if self.action_detail is not None:
+            details = (
+                f"{action.get('priority', '').upper()} {action.get('type', '')}\n"
+                f"{action.get('artist', '')} - {action.get('title', '')}\n"
+                f"{action.get('description', '')}\n"
+                f"Evidence: {', '.join(action.get('evidence', []))}"
+            ).strip()
+            self.action_detail.config(state="normal")
+            self.action_detail.delete("1.0", tk.END)
+            self.action_detail.insert(tk.END, details or "No archive actions found.")
+            self.action_detail.config(state="disabled")
 
     def save_audio_settings(self):
         for (section, key), var in self.audio_setting_vars.items():
