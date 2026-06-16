@@ -8,6 +8,11 @@ import re
 import threading
 
 from curator.curate import run_curation
+from audio_division.dashboard import dashboard_summary
+from audio_division.settings import (
+    load_audio_division_settings,
+    save_audio_division_settings,
+)
 
 # ---------------- Base paths ----------------
 
@@ -18,6 +23,7 @@ INBOX = DATA_DIR / "inbox.txt"
 LOG = DATA_DIR / "curated.log"
 ARTISTS_DIR = DATA_DIR / "artists"
 SHIPPED_DIR = DATA_DIR / "shipped"
+AUDIO_DIVISION_SETTINGS_FILE = DATA_DIR / "audio_division_settings.json"
 META_FILE = DATA_DIR / "artist_meta.json"
 
 STREAMRIP_BIN = Path(
@@ -67,6 +73,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.include_live = tk.BooleanVar(value=True)
         self.include_compilations = tk.BooleanVar(value=True)
 
+        self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
+        self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
+        self.dashboard_value_labels: dict[str, ttk.Label] = {}
+
         self._build_layout()
         self.refresh_artists()
         self.load_inbox()
@@ -75,7 +85,19 @@ class DeezerCuratorGUI(tk.Tk):
     # ---------------- UI ----------------
 
     def _build_layout(self):
-        main = ttk.Panedwindow(self, orient="horizontal")
+        self.tabs = ttk.Notebook(self)
+        self.tabs.pack(fill="both", expand=True)
+
+        curator_tab = ttk.Frame(self.tabs)
+        self.tabs.add(curator_tab, text="Curator")
+
+        audio_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(audio_tab, text="Audio Division")
+
+        settings_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(settings_tab, text="Settings")
+
+        main = ttk.Panedwindow(curator_tab, orient="horizontal")
         main.pack(fill="both", expand=True)
 
         # ===== LEFT =====
@@ -117,7 +139,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.custom_editor.pack(fill="both", expand=True)
 
         # ===== BOTTOM =====
-        bottom = ttk.Frame(self, padding=8)
+        bottom = ttk.Frame(curator_tab, padding=8)
         bottom.pack(fill="x")
 
         ttk.Button(bottom, text="Show Artist", command=self.show_artist_mode).pack(
@@ -170,6 +192,112 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.status = ttk.Label(bottom, text="Idle")
         self.status.pack(side="right")
+
+        self._build_audio_dashboard(audio_tab)
+        self._build_settings_tab(settings_tab)
+
+    def _build_audio_dashboard(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_audio_dashboard).pack(side="left")
+
+        grid = ttk.Frame(parent)
+        grid.pack(fill="both", expand=True)
+
+        sections = [
+            ("Archive Overview", [
+                ("archive_overview.albums", "Albums"),
+                ("archive_overview.artists", "Artists"),
+                ("archive_overview.cached_tracks", "Cached Tracks"),
+                ("archive_overview.archive_strength", "Archive Strength"),
+            ]),
+            ("Lifecycle", [
+                ("lifecycle.discovered", "Discovered"),
+                ("lifecycle.attempted", "Attempted"),
+                ("lifecycle.shipped", "Shipped"),
+                ("lifecycle.validated", "Validated"),
+                ("lifecycle.confirmed", "Confirmed"),
+            ]),
+            ("Identity", [
+                ("identity.high_confidence", "High Confidence"),
+                ("identity.medium_confidence", "Medium Confidence"),
+                ("identity.unknown", "Unknown"),
+                ("identity.unresolved_logs", "Unresolved Logs"),
+            ]),
+            ("Metadata", [
+                ("metadata.albums_cached", "Albums Cached"),
+                ("metadata.artists_cached", "Artists Cached"),
+                ("metadata.tracks_cached", "Tracks Cached"),
+                ("metadata.coverage_percent", "Metadata Coverage"),
+            ]),
+            ("Validation", [
+                ("validation.coverage_percent", "Validation Coverage"),
+                ("validation.evidence_count", "Validation Evidence Count"),
+            ]),
+            ("Archive Health", [
+                ("archive_health.shipped_not_validated", "Shipped Not Validated"),
+                ("archive_health.attempted_not_shipped", "Attempted Not Shipped"),
+                ("archive_health.confirmed_not_validated", "Confirmed Not Validated"),
+            ]),
+        ]
+
+        for idx, (title, fields) in enumerate(sections):
+            frame = ttk.LabelFrame(grid, text=title, padding=8)
+            frame.grid(row=idx // 3, column=idx % 3, sticky="nsew", padx=5, pady=5)
+            grid.columnconfigure(idx % 3, weight=1)
+            grid.rowconfigure(idx // 3, weight=1)
+            for row, (key, label) in enumerate(fields):
+                ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=2)
+                value = ttk.Label(frame, text="0")
+                value.grid(row=row, column=1, sticky="e", pady=2)
+                frame.columnconfigure(1, weight=1)
+                self.dashboard_value_labels[key] = value
+
+        self.refresh_audio_dashboard()
+
+    def _build_settings_tab(self, parent):
+        fields = [
+            ("archive_paths", "main_archive_root", "Main Archive Root"),
+            ("archive_paths", "incoming_root", "Incoming Root"),
+            ("archive_paths", "problematic_root", "Problematic Root"),
+            ("archive_paths", "needs_validation_root", "Needs Validation Root"),
+            ("validator", "validated_index_path", "Validated Index Path"),
+            ("validator", "validation_log_root", "Validation Log Root"),
+            ("metadata", "metadata_cache_path", "Metadata Cache Path"),
+            ("reports", "reports_directory", "Reports Directory"),
+        ]
+        form = ttk.Frame(parent)
+        form.pack(fill="both", expand=True)
+        for row, (section, key, label) in enumerate(fields):
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
+            var = tk.StringVar(value=self.audio_settings.get(section, {}).get(key, ""))
+            ttk.Entry(form, textvariable=var).grid(row=row, column=1, sticky="ew", pady=4)
+            self.audio_setting_vars[(section, key)] = var
+        form.columnconfigure(1, weight=1)
+
+        buttons = ttk.Frame(parent)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="Save Settings", command=self.save_audio_settings).pack(side="left")
+        ttk.Button(buttons, text="Reload Settings", command=self.reload_audio_settings).pack(side="left", padx=(6, 0))
+
+    def refresh_audio_dashboard(self):
+        summary = dashboard_summary(DATA_DIR)
+        for key, label in self.dashboard_value_labels.items():
+            section, field = key.split(".", 1)
+            value = summary.get(section, {}).get(field, 0)
+            label.config(text=f"{value:.1%}" if isinstance(value, float) else str(value))
+
+    def save_audio_settings(self):
+        for (section, key), var in self.audio_setting_vars.items():
+            self.audio_settings.setdefault(section, {})[key] = var.get()
+        save_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE, self.audio_settings)
+        self.status.config(text="Audio Division settings saved")
+
+    def reload_audio_settings(self):
+        self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
+        for (section, key), var in self.audio_setting_vars.items():
+            var.set(self.audio_settings.get(section, {}).get(key, ""))
+        self.status.config(text="Audio Division settings reloaded")
 
     # ---------------- Sorting ----------------
 
