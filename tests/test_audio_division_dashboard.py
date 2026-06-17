@@ -40,6 +40,7 @@ class AudioDivisionDashboardTests(unittest.TestCase):
                 },
             },
             "validation_evidence_summary": {"albums_with_evidence": 3},
+            "albums": [{"album_id": str(idx)} for idx in range(1, 11)],
         }
         identity = {
             "summary": {
@@ -53,7 +54,9 @@ class AudioDivisionDashboardTests(unittest.TestCase):
                 "artists_cached": 5,
                 "tracks_cached": 20,
                 "coverage_percent": 0.2,
-            }
+            },
+            "albums": {"1": {}, "2": {}},
+            "errors": {"3": {"type": "album_fetch_failed"}},
         }
 
         summary = compute_dashboard_summary(lifecycle, identity, metadata)
@@ -65,6 +68,9 @@ class AudioDivisionDashboardTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["tracks_cached"], 20)
         self.assertEqual(summary["validation"]["coverage_percent"], 0.3)
         self.assertEqual(summary["archive_health"]["attempted_not_shipped"], 3)
+        self.assertEqual(summary["metadata"]["cached"], 2)
+        self.assertEqual(summary["metadata"]["missing"], 1)
+        self.assertEqual(summary["metadata"]["available_not_cached"], 7)
 
     def test_settings_save_and_load(self):
         with tempfile.TemporaryDirectory() as tmp:

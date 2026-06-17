@@ -91,7 +91,7 @@ class LibraryBrowserTests(unittest.TestCase):
         self.assertEqual(details["release_date"], "2001-03-07")
         self.assertEqual(details["identity_confidence"], "HIGH")
         self.assertEqual(details["validation_status"], "validated")
-        self.assertEqual(details["metadata_status"], "cached")
+        self.assertEqual(details["metadata_status"], "CACHED")
         self.assertEqual(details["genres"], ["Dance"])
         self.assertEqual(details["album_status"]["items"]["metadata"], "Present")
         self.assertEqual(details["archive_path_confidence"], "MEDIUM")
@@ -102,12 +102,12 @@ class LibraryBrowserTests(unittest.TestCase):
         details = album_details(library, "1")
         self.assertEqual(details["artist"], "Beta Artist")
         self.assertEqual(details["title"], "Fallback Album")
-        self.assertEqual(details["metadata_status"], "missing")
+        self.assertEqual(details["metadata_status"], "AVAILABLE_NOT_CACHED")
 
     def test_album_status_calculation(self):
         details = {
             "validation_status": "validated",
-            "metadata_status": "cached",
+            "metadata_status": "CACHED",
             "artifacts": {
                 "exists": True,
                 "nfo": True,

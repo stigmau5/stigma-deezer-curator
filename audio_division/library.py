@@ -7,6 +7,7 @@ from typing import Any
 from audio_division.artifacts import detect_album_artifacts
 from audio_division.archive_readiness import annotate_library_readiness
 from audio_division.dashboard import load_json
+from audio_division.metadata_status import album_metadata_status
 from curator.atomic import atomic_write_text
 
 
@@ -32,7 +33,7 @@ def build_library(
     metadata_albums = metadata.get("albums", {})
     lifecycle_rows = lifecycle.get("albums", [])
     albums = [
-        _album_record(row, metadata_albums.get(str(row.get("album_id")), {}), identity_by_album, archive_root)
+        _album_record(row, metadata_albums.get(str(row.get("album_id")), {}), metadata, identity_by_album, archive_root)
         for row in lifecycle_rows
     ]
     artists = build_artist_index(albums, metadata)
@@ -105,7 +106,7 @@ def album_status(details: dict[str, Any]) -> dict[str, Any]:
         "sfv": _artifact_status(details, "sfv"),
         "playlist": _artifact_status(details, "playlist"),
         "artwork": _artwork_status(details),
-        "metadata": _present_missing_unknown(details.get("metadata_status") == "cached", details.get("metadata_status")),
+        "metadata": _present_missing_unknown(details.get("metadata_status") == "CACHED", details.get("metadata_status")),
     }
     known = [value for value in items.values() if value != "Unknown"]
     present = sum(1 for value in known if value == "Present")
@@ -214,11 +215,13 @@ def library_summary(
 def _album_record(
     lifecycle_row: dict[str, Any],
     metadata_album: dict[str, Any],
+    metadata: dict[str, Any],
     identity_by_album: dict[str, dict[str, Any]],
     archive_root: Path | None,
 ) -> dict[str, Any]:
     album_id = str(lifecycle_row.get("album_id"))
     identity = identity_by_album.get(album_id, {})
+    metadata_detail = album_metadata_status(album_id, metadata)
     path_resolution = resolve_archive_path(identity, archive_root)
     archive_path_text = path_resolution.get("archive_path", "")
     archive_path = Path(archive_path_text) if archive_path_text else None
@@ -244,7 +247,8 @@ def _album_record(
         "lifecycle_state": lifecycle_row.get("highest_state"),
         "identity_confidence": identity.get("identity_confidence", "UNKNOWN"),
         "validation_status": validation_status,
-        "metadata_status": "cached" if metadata_album else "missing",
+        "metadata_status": metadata_detail["state"],
+        "metadata_detail": metadata_detail,
         "archive_folder": path_resolution["archive_folder"],
         "archive_path": path_resolution["archive_path"],
         "archive_path_confidence": path_resolution["archive_path_confidence"],
@@ -253,7 +257,7 @@ def _album_record(
         "album_status": album_status(
             {
                 "validation_status": validation_status,
-                "metadata_status": "cached" if metadata_album else "missing",
+                "metadata_status": metadata_detail["state"],
                 "artifacts": artifacts,
                 "artwork": {
                     "cover_identity": metadata_album.get("cover_identity"),

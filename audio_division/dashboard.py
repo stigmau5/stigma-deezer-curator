@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.actions import ACTION_CATEGORIES, action_summary, generate_archive_actions
+from audio_division.metadata_status import metadata_coverage as compute_metadata_coverage
 from audio_division.operations import operation_summary
 
 
@@ -62,6 +63,7 @@ def compute_dashboard_summary(
     total_albums = lifecycle_summary.get("total_albums", len(lifecycle.get("albums", [])))
 
     metadata_summary = metadata.get("summary", {})
+    metadata_state_summary = compute_metadata_coverage(lifecycle, metadata)
     albums_cached = metadata_summary.get("albums_with_metadata", len(metadata.get("albums", {})))
     artists_cached = metadata_summary.get("artists_cached", len(metadata.get("artists", {})))
     tracks_cached = metadata_summary.get("tracks_cached", len(metadata.get("tracks", {})))
@@ -106,6 +108,10 @@ def compute_dashboard_summary(
             "artists_cached": artists_cached,
             "tracks_cached": tracks_cached,
             "coverage_percent": metadata_coverage,
+            "cached": metadata_state_summary["states"].get("CACHED", 0),
+            "available_not_cached": metadata_state_summary["states"].get("AVAILABLE_NOT_CACHED", 0),
+            "missing": metadata_state_summary["states"].get("MISSING", 0),
+            "unknown": metadata_state_summary["states"].get("UNKNOWN", 0),
         },
         "validation": {
             "coverage_percent": validation_coverage,

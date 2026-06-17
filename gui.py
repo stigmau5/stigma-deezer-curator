@@ -426,6 +426,12 @@ class DeezerCuratorGUI(tk.Tk):
                 ("metadata.tracks_cached", "Tracks Cached"),
                 ("metadata.coverage_percent", "Metadata Coverage"),
             ]),
+            ("Metadata Overview", [
+                ("metadata.cached", "Cached"),
+                ("metadata.available_not_cached", "Available Not Cached"),
+                ("metadata.missing", "Missing"),
+                ("metadata.unknown", "Unknown"),
+            ]),
             ("Validation", [
                 ("validation.coverage_percent", "Validation Coverage"),
                 ("validation.evidence_count", "Validation Evidence Count"),
@@ -638,6 +644,9 @@ class DeezerCuratorGUI(tk.Tk):
         if details:
             urls = artwork.get("urls", {}) if isinstance(artwork.get("urls"), dict) else {}
             readiness = details.get("archive_readiness", {})
+            metadata_detail = details.get("metadata_detail", {})
+            cached_fields = metadata_detail.get("cached_fields", {})
+            missing_fields = metadata_detail.get("missing_fields", [])
             lines = [
                 details.get("title", ""),
                 f"Artist: {details.get('artist', '')}",
@@ -654,6 +663,9 @@ class DeezerCuratorGUI(tk.Tk):
                 f"Identity Confidence: {details.get('identity_confidence', '')}",
                 f"Validation Status: {details.get('validation_status', '')}",
                 f"Metadata Status: {details.get('metadata_status', '')}",
+                f"Metadata Coverage: {sum(1 for value in cached_fields.values() if value)}/{len(cached_fields) or 5}",
+                f"Cached Metadata Fields: {', '.join(field for field, present in cached_fields.items() if present)}",
+                f"Missing Metadata Fields: {', '.join(missing_fields)}",
                 f"Archive Strength Signals: {', '.join(k for k, v in signals.items() if v)}",
                 f"Artwork URL: {artwork.get('url') or urls.get('medium') or urls.get('big') or urls.get('xl') or ''}",
                 f"Artwork Identity: {artwork.get('md5_image') or artwork.get('cover_identity') or ''}",
