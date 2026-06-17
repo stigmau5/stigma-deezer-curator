@@ -29,11 +29,23 @@ def load_dashboard_sources(data_dir: Path) -> dict[str, dict[str, Any]]:
 
 def dashboard_summary(data_dir: Path) -> dict[str, Any]:
     sources = load_dashboard_sources(data_dir)
+    readiness = {}
+    try:
+        from audio_division.library import library_from_data_dir
+        from audio_division.settings import load_audio_division_settings
+
+        settings = load_audio_division_settings(data_dir / "audio_division_settings.json")
+        archive_root = settings.get("archive_paths", {}).get("main_archive_root", "")
+        library = library_from_data_dir(data_dir, Path(archive_root) if archive_root else None)
+        readiness = library.get("archive_readiness_summary", {})
+    except Exception:
+        readiness = {}
     return compute_dashboard_summary(
         sources["lifecycle"],
         sources["identity"],
         sources["metadata"],
         sources["operation_history"],
+        readiness,
     )
 
 
@@ -42,6 +54,7 @@ def compute_dashboard_summary(
     identity: dict[str, Any],
     metadata: dict[str, Any],
     operation_history: dict[str, Any] | None = None,
+    readiness_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lifecycle_summary = lifecycle.get("summary", {})
     state_counts = lifecycle_summary.get("state_evidence_counts", {})
@@ -66,6 +79,7 @@ def compute_dashboard_summary(
     operations_summary = operation_summary(actions)
     first_action = actions[0] if actions else {}
     history = (operation_history or {}).get("history", [])
+    readiness_counts = (readiness_summary or {}).get("counts", {})
 
     return {
         "archive_overview": {
@@ -101,6 +115,13 @@ def compute_dashboard_summary(
             "shipped_not_validated": gaps.get("shipped_not_validated", 0),
             "attempted_not_shipped": max(state_counts.get("ATTEMPTED", 0) - state_counts.get("SHIPPED", 0), 0),
             "confirmed_not_validated": gaps.get("confirmed_not_validated", 0),
+        },
+        "archive_readiness": {
+            "archive_ready": readiness_counts.get("ARCHIVE_READY", 0),
+            "needs_validation": readiness_counts.get("NEEDS_VALIDATION", 0),
+            "needs_documentation": readiness_counts.get("NEEDS_DOCUMENTATION", 0),
+            "needs_review": readiness_counts.get("NEEDS_REVIEW", 0),
+            "unknown": readiness_counts.get("UNKNOWN", 0),
         },
         "archive_actions": {
             "action_count": actions_summary["total_actions"],

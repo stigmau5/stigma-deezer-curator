@@ -129,6 +129,7 @@ def filter_opportunities(
 def opportunity_summary(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
     priorities = Counter(item["priority"] for item in opportunities)
     categories = Counter(item["category"] for item in opportunities)
+    readiness = Counter(item.get("readiness", "") for item in opportunities if item.get("readiness"))
     return {
         "total": len(opportunities),
         "high": priorities.get("HIGH", 0),
@@ -136,6 +137,7 @@ def opportunity_summary(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         "low": priorities.get("LOW", 0),
         "top_categories": categories.most_common(5),
         "by_category": {category: categories.get(category, 0) for category in OPPORTUNITY_CATEGORIES},
+        "by_readiness": dict(readiness),
     }
 
 
@@ -161,6 +163,10 @@ def render_opportunities_report(opportunities: list[dict[str, Any]], *, generate
     ]
     for category, count in summary["by_category"].items():
         lines.append(f"| {category} | {count} |")
+
+    lines.extend(["", "## Readiness Categories", "", "| Readiness | Opportunities |", "| --- | ---: |"])
+    for readiness, count in sorted(summary["by_readiness"].items()):
+        lines.append(f"| {readiness} | {count} |")
 
     lines.extend(
         [
@@ -207,6 +213,7 @@ def _append_if(
             "priority": priority,
             "description": description,
             "recommended_action": recommended_action,
+            "readiness": album.get("archive_readiness", {}).get("state", ""),
         }
     )
 

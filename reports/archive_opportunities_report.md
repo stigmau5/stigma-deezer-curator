@@ -1,6 +1,6 @@
 # Archive Opportunities Report
 
-Generated: 2026-06-17T13:02:36
+Generated: 2026-06-17T13:48:15
 
 Archive opportunities are read-only maintenance recommendations. No operations are executed by this report.
 
@@ -21,6 +21,13 @@ Archive opportunities are read-only maintenance recommendations. No operations a
 | low_album_health | 6651 |
 | identity_review | 6149 |
 | missing_metadata | 6629 |
+
+## Readiness Categories
+
+| Readiness | Opportunities |
+| --- | ---: |
+| NEEDS_DOCUMENTATION | 1004 |
+| UNKNOWN | 24574 |
 
 ## Opportunities
 

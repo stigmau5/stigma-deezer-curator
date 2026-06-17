@@ -29,6 +29,7 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                             "metadata": "Present",
                         },
                     },
+                    "archive_readiness": {"state": "NEEDS_DOCUMENTATION"},
                 },
                 {
                     "album_id": "2",
@@ -47,6 +48,7 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                             "metadata": "Missing",
                         },
                     },
+                    "archive_readiness": {"state": "UNKNOWN"},
                 },
             ]
         }
@@ -82,6 +84,7 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
         report = render_opportunities_report(opportunities, generated_at="2026-06-17T12:00:00")
         self.assertEqual(summary["total"], len(opportunities))
         self.assertGreater(summary["high"], 0)
+        self.assertGreater(summary["by_readiness"]["UNKNOWN"], 0)
         self.assertIn("Archive Opportunities Report", report)
         self.assertIn("Validated Album", report)
 

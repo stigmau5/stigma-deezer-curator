@@ -435,6 +435,13 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_health.attempted_not_shipped", "Attempted Not Shipped"),
                 ("archive_health.confirmed_not_validated", "Confirmed Not Validated"),
             ]),
+            ("Archive Readiness", [
+                ("archive_readiness.archive_ready", "Archive Ready"),
+                ("archive_readiness.needs_validation", "Needs Validation"),
+                ("archive_readiness.needs_documentation", "Needs Documentation"),
+                ("archive_readiness.needs_review", "Needs Review"),
+                ("archive_readiness.unknown", "Unknown"),
+            ]),
             ("Archive Actions", [
                 ("archive_actions.action_count", "Action Count"),
                 ("archive_actions.missing_nfo", "Missing NFO"),
@@ -630,6 +637,7 @@ class DeezerCuratorGUI(tk.Tk):
         lines = []
         if details:
             urls = artwork.get("urls", {}) if isinstance(artwork.get("urls"), dict) else {}
+            readiness = details.get("archive_readiness", {})
             lines = [
                 details.get("title", ""),
                 f"Artist: {details.get('artist', '')}",
@@ -658,6 +666,12 @@ class DeezerCuratorGUI(tk.Tk):
                 f"Artwork: {status_items.get('artwork', 'Unknown')} ({counts.get('artwork', 0)})",
                 f"Metadata: {status_items.get('metadata', 'Unknown')}",
                 f"Album Health: {status.get('health_percent', 0)}%",
+                "",
+                "Archive Readiness:",
+                f"State: {readiness.get('state', 'UNKNOWN')}",
+                f"Reason: {readiness.get('reason', '')}",
+                f"Confidence: {readiness.get('confidence', '')}",
+                f"Explanation: {', '.join(readiness.get('explanation', []))}",
             ]
         self.library_detail_text.config(state="normal")
         self.library_detail_text.delete("1.0", tk.END)

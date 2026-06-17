@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.artifacts import detect_album_artifacts
+from audio_division.archive_readiness import annotate_library_readiness
 from audio_division.dashboard import load_json
 from curator.atomic import atomic_write_text
 
@@ -36,12 +37,12 @@ def build_library(
     ]
     artists = build_artist_index(albums, metadata)
 
-    return {
+    return annotate_library_readiness({
         "summary": library_summary(artists, albums, metadata, lifecycle),
         "artists": artists,
         "albums": sorted(albums, key=lambda item: (_sort_text(item["artist"]), _sort_text(item["title"]), item["album_id"])),
         "albums_by_artist": _albums_by_artist(albums),
-    }
+    })
 
 
 def library_from_data_dir(data_dir: Path, archive_root: Path | None = None) -> dict[str, Any]:
