@@ -23,6 +23,7 @@ It shows:
 - validation coverage
 - archive health gaps
 - archive action counts and first recommended action details
+- archive operation candidate counts
 
 ## Data Sources
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.actions import ACTION_CATEGORIES, action_summary, generate_archive_actions
+from audio_division.operations import operation_summary
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -59,6 +60,7 @@ def compute_dashboard_summary(
     archive_strength = _archive_strength_score(total_albums, identity_counts.get("HIGH", 0), validated, metadata_coverage)
     actions = generate_archive_actions(lifecycle, identity, metadata)
     actions_summary = action_summary(actions)
+    operations_summary = operation_summary(actions)
     first_action = actions[0] if actions else {}
 
     return {
@@ -101,6 +103,10 @@ def compute_dashboard_summary(
             **{category: actions_summary["by_category"].get(category, 0) for category in ACTION_CATEGORIES},
             "selected_action": first_action,
             "actions": actions,
+        },
+        "archive_operations": {
+            "operation_count": operations_summary["total_operations"],
+            **operations_summary["candidate_counts"],
         },
     }
 

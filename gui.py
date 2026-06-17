@@ -249,6 +249,14 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_actions.missing_artwork", "Missing Artwork"),
                 ("archive_actions.identity_review", "Identity Review"),
             ]),
+            ("Archive Operations", [
+                ("archive_operations.operation_count", "Operations"),
+                ("archive_operations.generate_nfo", "Generate NFO"),
+                ("archive_operations.generate_sfv", "Generate SFV"),
+                ("archive_operations.validate_album", "Validate Album"),
+                ("archive_operations.open_album_folder", "Open Album Folder"),
+                ("archive_operations.refresh_metadata", "Refresh Metadata"),
+            ]),
         ]
 
         for idx, (title, fields) in enumerate(sections):
