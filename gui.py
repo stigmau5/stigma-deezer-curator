@@ -14,6 +14,12 @@ from audio_division.settings import (
     save_audio_division_settings,
 )
 from audio_division.operation_runner import run_operation
+from audio_division.batch_operations import (
+    available_batch_operations,
+    collect_album_targets,
+    run_batch_operation,
+    write_batch_operation_report,
+)
 from audio_division.library import (
     album_archive_operation_target,
     album_details,
@@ -105,6 +111,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.opportunity_category_var = tk.StringVar(value="")
         self.opportunity_priority_var = tk.StringVar(value="")
         self.opportunity_artist_var = tk.StringVar()
+        self.batch_progress_var = tk.StringVar(value="No batch running.")
 
         self._build_layout()
         self.refresh_artists()
@@ -313,6 +320,9 @@ class DeezerCuratorGUI(tk.Tk):
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Button(toolbar, text="Refresh", command=self.refresh_opportunities).pack(side="left")
         ttk.Button(toolbar, text="Show Album", command=self.open_selected_opportunity_album).pack(side="left", padx=(6, 0))
+        ttk.Button(toolbar, text="Generate NFO", command=lambda: self.run_opportunity_batch("generate_nfo")).pack(side="left", padx=(18, 0))
+        ttk.Button(toolbar, text="Generate SFV", command=lambda: self.run_opportunity_batch("generate_sfv")).pack(side="left", padx=(6, 0))
+        ttk.Button(toolbar, text="Validate Albums", command=lambda: self.run_opportunity_batch("validate_album")).pack(side="left", padx=(6, 0))
 
         filters = ttk.LabelFrame(parent, text="Filters", padding=8)
         filters.pack(fill="x", pady=(0, 10))
@@ -358,8 +368,12 @@ class DeezerCuratorGUI(tk.Tk):
             value.grid(row=0, column=col * 2 + 1, sticky="w", padx=(0, 18))
             self.opportunity_summary_labels[key] = value
 
+        batch = ttk.LabelFrame(parent, text="Batch Progress", padding=8)
+        batch.pack(fill="x", pady=(0, 10))
+        ttk.Label(batch, textvariable=self.batch_progress_var).pack(anchor="w")
+
         columns = ("category", "priority", "artist", "album", "recommended_action")
-        self.opportunity_tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse")
+        self.opportunity_tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="extended")
         headings = [
             ("category", "Category", 170),
             ("priority", "Priority", 90),
@@ -745,6 +759,57 @@ class DeezerCuratorGUI(tk.Tk):
                 return
         self.set_library_detail(details)
         self.status.config(text="Opened opportunity album details")
+
+    def selected_opportunities(self) -> list[dict]:
+        selection = self.opportunity_tree.selection()
+        if not selection:
+            return list(self.filtered_opportunity_rows)
+        rows = []
+        for item in selection:
+            index = int(item)
+            if index < len(self.filtered_opportunity_rows):
+                rows.append(self.filtered_opportunity_rows[index])
+        return rows
+
+    def run_opportunity_batch(self, operation_id: str):
+        opportunities = self.selected_opportunities()
+        counts = available_batch_operations(opportunities)
+        if counts.get(operation_id, 0) == 0:
+            self.batch_progress_var.set(f"No eligible opportunities for {operation_id}.")
+            return
+
+        targets = collect_album_targets(operation_id, opportunities, self.library_data)
+        target_count = sum(1 for target in targets if target.get("eligible"))
+        if target_count == 0:
+            self.batch_progress_var.set("No archive paths available for this batch.")
+            return
+        if operation_id != "open_album_folder":
+            ok = messagebox.askyesno(
+                "Confirm Batch Operation",
+                f"Operation: {operation_id}\nAlbum Count: {len(targets)}\nTarget Count: {target_count}",
+            )
+            if not ok:
+                self.batch_progress_var.set("Batch cancelled.")
+                return
+
+        def update_progress(progress):
+            self.batch_progress_var.set(
+                f"Total: {progress['total']}  Completed: {progress['completed']}  Current: {progress['current_item']}"
+            )
+
+        summary = run_batch_operation(
+            operation_id,
+            targets,
+            self.audio_settings,
+            OPERATION_HISTORY_FILE,
+            progress=update_progress,
+        )
+        write_batch_operation_report(summary, BASE_DIR / "reports")
+        self.batch_progress_var.set(
+            f"Completed {summary['operation']}: {summary['successes']} succeeded, "
+            f"{summary['failures']} failed, {summary.get('skipped', 0)} skipped."
+        )
+        self.refresh_audio_dashboard()
 
     def save_audio_settings(self):
         for (section, key), var in self.audio_setting_vars.items():

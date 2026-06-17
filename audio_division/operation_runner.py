@@ -67,11 +67,12 @@ def run_operation(
     settings: dict[str, Any],
     history_path: Path,
     *,
+    batch_id: str = "",
     runner: Callable[..., Any] = subprocess.run,
 ) -> dict[str, Any]:
     valid, message = validate_operation_request(operation_id, target, settings)
     if not valid:
-        result = _result(operation_id, target, False, message)
+        result = _result(operation_id, target, False, message, batch_id=batch_id)
         record_operation_history(history_path, result)
         return result
 
@@ -85,7 +86,7 @@ def run_operation(
         success = False
         message = str(exc)
 
-    result = _result(operation_id, target, success, message)
+    result = _result(operation_id, target, success, message, batch_id=batch_id)
     record_operation_history(history_path, result)
     return result
 
@@ -100,11 +101,14 @@ def _tool_path(operation_id: str, settings: dict[str, Any]) -> str:
     return str(tools.get(keys.get(operation_id, ""), "")).strip()
 
 
-def _result(operation_id: str, target: str, success: bool, message: str) -> dict[str, Any]:
-    return {
+def _result(operation_id: str, target: str, success: bool, message: str, *, batch_id: str = "") -> dict[str, Any]:
+    result = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "operation": operation_id,
         "target": target,
         "result": "success" if success else "failure",
         "message": message,
     }
+    if batch_id:
+        result["batch_id"] = batch_id
+    return result
