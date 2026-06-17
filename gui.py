@@ -15,6 +15,12 @@ from audio_division.settings import (
 )
 from audio_division.operation_runner import run_operation
 from audio_division.library import album_details, albums_for_artist, library_from_data_dir
+from audio_division.opportunities import (
+    OPPORTUNITY_CATEGORIES,
+    filter_opportunities,
+    generate_opportunities,
+    opportunity_summary,
+)
 
 # ---------------- Base paths ----------------
 
@@ -88,6 +94,12 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_summary_labels: dict[str, ttk.Label] = {}
         self.library_selected_album: dict = {}
         self.library_operation_result_var = tk.StringVar()
+        self.opportunity_rows: list[dict] = []
+        self.filtered_opportunity_rows: list[dict] = []
+        self.opportunity_summary_labels: dict[str, ttk.Label] = {}
+        self.opportunity_category_var = tk.StringVar(value="")
+        self.opportunity_priority_var = tk.StringVar(value="")
+        self.opportunity_artist_var = tk.StringVar()
 
         self._build_layout()
         self.refresh_artists()
@@ -108,6 +120,10 @@ class DeezerCuratorGUI(tk.Tk):
 
         library_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(library_tab, text="Library")
+        self.library_tab = library_tab
+
+        opportunities_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(opportunities_tab, text="Archive Opportunities")
 
         settings_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(settings_tab, text="Settings")
@@ -210,6 +226,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         self._build_audio_dashboard(audio_tab)
         self._build_library_tab(library_tab)
+        self._build_opportunities_tab(opportunities_tab)
         self._build_settings_tab(settings_tab)
 
     def _build_library_tab(self, parent):
@@ -285,6 +302,76 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Label(operations, textvariable=self.library_operation_result_var).pack(anchor="w", pady=(6, 0))
 
         self.refresh_library()
+
+    def _build_opportunities_tab(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_opportunities).pack(side="left")
+        ttk.Button(toolbar, text="Show Album", command=self.open_selected_opportunity_album).pack(side="left", padx=(6, 0))
+
+        filters = ttk.LabelFrame(parent, text="Filters", padding=8)
+        filters.pack(fill="x", pady=(0, 10))
+        ttk.Label(filters, text="Category").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        category = ttk.Combobox(
+            filters,
+            textvariable=self.opportunity_category_var,
+            values=["", *OPPORTUNITY_CATEGORIES],
+            state="readonly",
+            width=22,
+        )
+        category.grid(row=0, column=1, sticky="w", padx=(0, 12))
+        ttk.Label(filters, text="Priority").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        priority = ttk.Combobox(
+            filters,
+            textvariable=self.opportunity_priority_var,
+            values=["", "HIGH", "MEDIUM", "LOW"],
+            state="readonly",
+            width=12,
+        )
+        priority.grid(row=0, column=3, sticky="w", padx=(0, 12))
+        ttk.Label(filters, text="Artist").grid(row=0, column=4, sticky="w", padx=(0, 6))
+        artist = ttk.Entry(filters, textvariable=self.opportunity_artist_var)
+        artist.grid(row=0, column=5, sticky="ew")
+        filters.columnconfigure(5, weight=1)
+        category.bind("<<ComboboxSelected>>", lambda event: self.apply_opportunity_filters())
+        priority.bind("<<ComboboxSelected>>", lambda event: self.apply_opportunity_filters())
+        artist.bind("<KeyRelease>", lambda event: self.apply_opportunity_filters())
+
+        summary = ttk.LabelFrame(parent, text="Summary", padding=8)
+        summary.pack(fill="x", pady=(0, 10))
+        for col, (key, label) in enumerate(
+            (
+                ("total", "Total Opportunities"),
+                ("high", "High Priority"),
+                ("medium", "Medium Priority"),
+                ("low", "Low Priority"),
+                ("top_categories", "Top Categories"),
+            )
+        ):
+            ttk.Label(summary, text=label).grid(row=0, column=col * 2, sticky="w", padx=(0, 6))
+            value = ttk.Label(summary, text="0")
+            value.grid(row=0, column=col * 2 + 1, sticky="w", padx=(0, 18))
+            self.opportunity_summary_labels[key] = value
+
+        columns = ("category", "priority", "artist", "album", "recommended_action")
+        self.opportunity_tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse")
+        headings = [
+            ("category", "Category", 170),
+            ("priority", "Priority", 90),
+            ("artist", "Artist", 180),
+            ("album", "Album", 260),
+            ("recommended_action", "Recommended Action", 180),
+        ]
+        for column, text, width in headings:
+            self.opportunity_tree.heading(column, text=text, command=lambda c=column: self.sort_opportunities(c))
+            self.opportunity_tree.column(column, width=width, anchor="w")
+        self.opportunity_tree.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.opportunity_tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.opportunity_tree.configure(yscrollcommand=scrollbar.set)
+        self.opportunity_tree.bind("<Double-1>", lambda event: self.open_selected_opportunity_album())
+
+        self.refresh_opportunities()
 
     def _build_audio_dashboard(self, parent):
         toolbar = ttk.Frame(parent)
@@ -475,6 +562,8 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.clear_library_albums()
         self.set_library_detail({})
+        if hasattr(self, "opportunity_tree"):
+            self.refresh_opportunities()
 
     def clear_library_albums(self):
         self.library_album_rows = []
@@ -567,6 +656,88 @@ class DeezerCuratorGUI(tk.Tk):
             self.library_selected_album = album_details(self.library_data, album_id)
             self.set_library_detail(self.library_selected_album)
         self.refresh_audio_dashboard()
+
+    def refresh_opportunities(self):
+        if not hasattr(self, "opportunity_tree"):
+            return
+        if not self.library_data:
+            self.refresh_library()
+        self.opportunity_rows = generate_opportunities(self.library_data)
+        self.apply_opportunity_filters()
+
+    def apply_opportunity_filters(self):
+        self.filtered_opportunity_rows = filter_opportunities(
+            self.opportunity_rows,
+            category=self.opportunity_category_var.get(),
+            priority=self.opportunity_priority_var.get(),
+            artist=self.opportunity_artist_var.get(),
+        )
+        self.render_opportunities()
+
+    def render_opportunities(self):
+        summary = opportunity_summary(self.filtered_opportunity_rows)
+        top_categories = ", ".join(f"{category}: {count}" for category, count in summary.get("top_categories", [])[:3])
+        values = {
+            "total": summary.get("total", 0),
+            "high": summary.get("high", 0),
+            "medium": summary.get("medium", 0),
+            "low": summary.get("low", 0),
+            "top_categories": top_categories,
+        }
+        for key, label in self.opportunity_summary_labels.items():
+            label.config(text=str(values.get(key, 0)))
+
+        for item in self.opportunity_tree.get_children():
+            self.opportunity_tree.delete(item)
+        for idx, row in enumerate(self.filtered_opportunity_rows):
+            self.opportunity_tree.insert(
+                "",
+                tk.END,
+                iid=str(idx),
+                values=(
+                    row.get("category", ""),
+                    row.get("priority", ""),
+                    row.get("artist", ""),
+                    row.get("album", ""),
+                    row.get("recommended_action", ""),
+                ),
+            )
+
+    def sort_opportunities(self, column: str):
+        self.filtered_opportunity_rows.sort(key=lambda row: str(row.get(column, "")).lower())
+        self.render_opportunities()
+
+    def open_selected_opportunity_album(self):
+        selection = self.opportunity_tree.selection()
+        if not selection:
+            return
+        index = int(selection[0])
+        if index >= len(self.filtered_opportunity_rows):
+            return
+        album_id = self.filtered_opportunity_rows[index].get("album_id", "")
+        details = album_details(self.library_data, album_id)
+        if not details:
+            self.status.config(text="Opportunity album is not available in Library data")
+            return
+        self.tabs.select(self.library_tab)
+        artist_key = details.get("artist_key", "")
+        for idx, row in enumerate(self.library_artist_rows):
+            if row.get("artist_key") == artist_key:
+                self.library_artist_list.selection_clear(0, tk.END)
+                self.library_artist_list.selection_set(idx)
+                self.library_artist_list.see(idx)
+                self.on_library_artist_selected()
+                break
+        for item in self.library_album_tree.get_children():
+            album_index = self.library_album_tree.index(item)
+            if album_index < len(self.library_album_rows) and self.library_album_rows[album_index].get("album_id") == album_id:
+                self.library_album_tree.selection_set(item)
+                self.library_album_tree.see(item)
+                self.on_library_album_selected()
+                self.status.config(text="Opened opportunity album in Library")
+                return
+        self.set_library_detail(details)
+        self.status.config(text="Opened opportunity album details")
 
     def save_audio_settings(self):
         for (section, key), var in self.audio_setting_vars.items():
