@@ -14,6 +14,7 @@ from audio_division.settings import (
     save_audio_division_settings,
 )
 from audio_division.operation_runner import run_operation
+from audio_division.library import album_details, albums_for_artist, library_from_data_dir
 
 # ---------------- Base paths ----------------
 
@@ -81,6 +82,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.action_detail = None
         self.operation_history_detail = None
         self.operation_target_var = tk.StringVar()
+        self.library_data = {}
+        self.library_artist_rows: list[dict] = []
+        self.library_album_rows: list[dict] = []
+        self.library_summary_labels: dict[str, ttk.Label] = {}
 
         self._build_layout()
         self.refresh_artists()
@@ -98,6 +103,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         audio_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(audio_tab, text="Audio Division")
+
+        library_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(library_tab, text="Library")
 
         settings_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(settings_tab, text="Settings")
@@ -199,7 +207,72 @@ class DeezerCuratorGUI(tk.Tk):
         self.status.pack(side="right")
 
         self._build_audio_dashboard(audio_tab)
+        self._build_library_tab(library_tab)
         self._build_settings_tab(settings_tab)
+
+    def _build_library_tab(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_library).pack(side="left")
+
+        summary = ttk.LabelFrame(parent, text="Library Summary", padding=8)
+        summary.pack(fill="x", pady=(0, 10))
+        fields = [
+            ("artists", "Artists"),
+            ("albums", "Albums"),
+            ("tracks", "Tracks"),
+            ("metadata_coverage", "Metadata Coverage"),
+            ("validation_coverage", "Validation Coverage"),
+        ]
+        for col, (key, label) in enumerate(fields):
+            ttk.Label(summary, text=label).grid(row=0, column=col * 2, sticky="w", padx=(0, 6))
+            value = ttk.Label(summary, text="0")
+            value.grid(row=0, column=col * 2 + 1, sticky="w", padx=(0, 18))
+            self.library_summary_labels[key] = value
+
+        browser = ttk.Panedwindow(parent, orient="horizontal")
+        browser.pack(fill="both", expand=True)
+
+        artists_frame = ttk.LabelFrame(browser, text="Artists", padding=6)
+        browser.add(artists_frame, weight=1)
+        self.library_artist_list = tk.Listbox(artists_frame, exportselection=False)
+        self.library_artist_list.pack(side="left", fill="both", expand=True)
+        artist_scroll = ttk.Scrollbar(artists_frame, orient="vertical", command=self.library_artist_list.yview)
+        artist_scroll.pack(side="right", fill="y")
+        self.library_artist_list.configure(yscrollcommand=artist_scroll.set)
+        self.library_artist_list.bind("<<ListboxSelect>>", self.on_library_artist_selected)
+
+        albums_frame = ttk.LabelFrame(browser, text="Albums", padding=6)
+        browser.add(albums_frame, weight=2)
+        columns = ("title", "year", "record_type", "validation")
+        self.library_album_tree = ttk.Treeview(
+            albums_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+        )
+        headings = [
+            ("title", "Title", 260),
+            ("year", "Year", 70),
+            ("record_type", "Type", 90),
+            ("validation", "Validation", 110),
+        ]
+        for column, text, width in headings:
+            self.library_album_tree.heading(column, text=text)
+            self.library_album_tree.column(column, width=width, anchor="w")
+        self.library_album_tree.pack(side="left", fill="both", expand=True)
+        album_scroll = ttk.Scrollbar(albums_frame, orient="vertical", command=self.library_album_tree.yview)
+        album_scroll.pack(side="right", fill="y")
+        self.library_album_tree.configure(yscrollcommand=album_scroll.set)
+        self.library_album_tree.bind("<<TreeviewSelect>>", self.on_library_album_selected)
+
+        details_frame = ttk.LabelFrame(browser, text="Album Details", padding=6)
+        browser.add(details_frame, weight=2)
+        self.library_detail_text = tk.Text(details_frame, wrap="word", height=20)
+        self.library_detail_text.pack(fill="both", expand=True)
+        self.library_detail_text.config(state="disabled")
+
+        self.refresh_library()
 
     def _build_audio_dashboard(self, parent):
         toolbar = ttk.Frame(parent)
@@ -367,6 +440,90 @@ class DeezerCuratorGUI(tk.Tk):
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
         self.status.config(text=f"{operation_id}: {result['result']} - {result['message']}")
         self.refresh_audio_dashboard()
+
+    def refresh_library(self):
+        try:
+            self.library_data = library_from_data_dir(DATA_DIR)
+        except Exception as exc:
+            self.library_data = {"artists": [], "albums": {}, "summary": {}}
+            self.status.config(text=f"Library refresh failed: {exc}")
+
+        summary = self.library_data.get("summary", {})
+        for key, label in self.library_summary_labels.items():
+            value = summary.get(key, 0)
+            label.config(text=f"{value:.1%}" if isinstance(value, float) else str(value))
+
+        self.library_artist_rows = list(self.library_data.get("artists", []))
+        self.library_artist_list.delete(0, tk.END)
+        for row in self.library_artist_rows:
+            count = row.get("album_count", 0)
+            suffix = f" ({count})" if count else ""
+            self.library_artist_list.insert(tk.END, f"{row.get('name', 'Unknown Artist')}{suffix}")
+
+        self.clear_library_albums()
+        self.set_library_detail({})
+
+    def clear_library_albums(self):
+        self.library_album_rows = []
+        for item in self.library_album_tree.get_children():
+            self.library_album_tree.delete(item)
+
+    def on_library_artist_selected(self, event=None):
+        selection = self.library_artist_list.curselection()
+        if not selection:
+            return
+        artist = self.library_artist_rows[selection[0]]
+        self.clear_library_albums()
+        self.library_album_rows = albums_for_artist(self.library_data, artist.get("artist_key", ""))
+        for row in self.library_album_rows:
+            self.library_album_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    row.get("title", ""),
+                    row.get("year", ""),
+                    row.get("record_type", ""),
+                    row.get("validation_status", ""),
+                ),
+            )
+        self.set_library_detail({})
+
+    def on_library_album_selected(self, event=None):
+        selection = self.library_album_tree.selection()
+        if not selection:
+            return
+        index = self.library_album_tree.index(selection[0])
+        if index >= len(self.library_album_rows):
+            return
+        album_id = self.library_album_rows[index].get("album_id", "")
+        self.set_library_detail(album_details(self.library_data, album_id))
+
+    def set_library_detail(self, details: dict):
+        artwork = details.get("artwork", {}) if details else {}
+        signals = details.get("archive_strength_signals", {}) if details else {}
+        lines = []
+        if details:
+            lines = [
+                details.get("title", ""),
+                f"Artist: {details.get('artist', '')}",
+                f"Year: {details.get('year', '')}",
+                f"Release Date: {details.get('release_date', '')}",
+                f"Label: {details.get('label', '')}",
+                f"Genres: {', '.join(details.get('genres', []))}",
+                f"Track Count: {details.get('track_count', '')}",
+                f"Duration: {details.get('duration', '')}",
+                f"Lifecycle State: {details.get('lifecycle_state', '')}",
+                f"Identity Confidence: {details.get('identity_confidence', '')}",
+                f"Validation Status: {details.get('validation_status', '')}",
+                f"Metadata Status: {details.get('metadata_status', '')}",
+                f"Archive Strength Signals: {', '.join(k for k, v in signals.items() if v)}",
+                f"Artwork URL: {artwork.get('url', '')}",
+                f"Artwork Identity: {artwork.get('md5_image', '')}",
+            ]
+        self.library_detail_text.config(state="normal")
+        self.library_detail_text.delete("1.0", tk.END)
+        self.library_detail_text.insert(tk.END, "\n".join(lines) or "Select an album.")
+        self.library_detail_text.config(state="disabled")
 
     def save_audio_settings(self):
         for (section, key), var in self.audio_setting_vars.items():
