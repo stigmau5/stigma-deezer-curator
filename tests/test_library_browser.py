@@ -5,10 +5,14 @@ from pathlib import Path
 
 from audio_division.library import (
     album_status,
+    album_archive_operation_target,
     album_details,
     albums_for_artist,
+    archive_path_summary,
     build_library,
     library_from_data_dir,
+    render_archive_path_resolution_report,
+    resolve_archive_path,
 )
 
 
@@ -90,6 +94,8 @@ class LibraryBrowserTests(unittest.TestCase):
         self.assertEqual(details["metadata_status"], "cached")
         self.assertEqual(details["genres"], ["Dance"])
         self.assertEqual(details["album_status"]["items"]["metadata"], "Present")
+        self.assertEqual(details["archive_path_confidence"], "MEDIUM")
+        self.assertEqual(details["archive_path"], "")
 
     def test_missing_metadata_fallback(self):
         library = build_library(self.sample_lifecycle(), self.sample_identity(), {"albums": {}, "artists": {}, "tracks": {}})
@@ -138,6 +144,42 @@ class LibraryBrowserTests(unittest.TestCase):
         self.assertTrue(details["artifacts"]["nfo"])
         self.assertEqual(details["artifacts"]["counts"]["playlist"], 1)
         self.assertEqual(details["album_status"]["health_percent"], 100)
+        self.assertEqual(details["archive_path"], str(album_dir))
+        self.assertEqual(details["archive_path_confidence"], "HIGH")
+
+    def test_path_resolution_confidence(self):
+        high = resolve_archive_path(
+            {"archive_identity": {"folder": "Artist - Album"}},
+            Path("/archive"),
+        )
+        medium = resolve_archive_path({"archive_identity": {"folder": "Artist - Album"}})
+        unknown = resolve_archive_path({})
+        self.assertEqual(high["archive_path"], "/archive/Artist - Album")
+        self.assertEqual(high["archive_path_confidence"], "HIGH")
+        self.assertEqual(medium["archive_path_confidence"], "MEDIUM")
+        self.assertEqual(medium["archive_path"], "")
+        self.assertEqual(unknown["archive_path_confidence"], "UNKNOWN")
+
+    def test_path_summary_and_report(self):
+        library = build_library(self.sample_lifecycle(), self.sample_identity(), self.sample_metadata(), Path("/archive"))
+        summary = archive_path_summary(library["albums"])
+        report = render_archive_path_resolution_report(library)
+        self.assertEqual(summary["known_archive_paths"], 1)
+        self.assertEqual(summary["unresolved_archive_paths"], 1)
+        self.assertIn("Archive Path Resolution Report", report)
+        self.assertIn("/archive/Alpha Artist - Cached Album", report)
+
+    def test_open_folder_target_lookup_and_missing_path(self):
+        known = {"archive_path": "/archive/Album", "archive_path_confidence": "HIGH"}
+        missing = {"archive_path": "", "archive_path_confidence": "UNKNOWN", "archive_path_reason": "no_archive_folder_evidence"}
+        medium = {
+            "archive_path": "",
+            "archive_path_confidence": "MEDIUM",
+            "archive_path_reason": "relative_archive_folder_without_archive_root",
+        }
+        self.assertEqual(album_archive_operation_target(known), ("/archive/Album", "ok"))
+        self.assertEqual(album_archive_operation_target(missing)[1], "No archive path available for this album.")
+        self.assertIn("Main Archive Root", album_archive_operation_target(medium)[1])
 
     def test_registry_loading(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -6,6 +6,7 @@ from typing import Any
 
 from audio_division.artifacts import detect_album_artifacts
 from audio_division.dashboard import load_json
+from curator.atomic import atomic_write_text
 
 
 def load_library_sources(data_dir: Path) -> dict[str, dict[str, Any]]:
@@ -81,6 +82,19 @@ def album_details(library: dict[str, Any], album_id: str) -> dict[str, Any]:
     return {}
 
 
+def album_archive_operation_target(details: dict[str, Any]) -> tuple[str, str]:
+    path = str(details.get("archive_path") or "").strip()
+    if path:
+        return path, "ok"
+    confidence = details.get("archive_path_confidence", "UNKNOWN")
+    reason = details.get("archive_path_reason", "no_archive_path")
+    if confidence == "MEDIUM":
+        return "", "Archive folder is known, but Main Archive Root is not configured."
+    if reason == "no_archive_folder_evidence":
+        return "", "No archive path available for this album."
+    return "", f"No archive path available for this album: {reason}"
+
+
 def album_status(details: dict[str, Any]) -> dict[str, Any]:
     if not details:
         return {"items": {}, "health_percent": 0}
@@ -98,6 +112,83 @@ def album_status(details: dict[str, Any]) -> dict[str, Any]:
         "items": items,
         "health_percent": round((present / len(known)) * 100) if known else 0,
     }
+
+
+def resolve_archive_path(identity: dict[str, Any], archive_root: Path | None = None) -> dict[str, Any]:
+    folder = identity.get("archive_identity", {}).get("folder") or ""
+    log_path = identity.get("validation", {}).get("validation_log_path") or ""
+    if log_path:
+        path = Path(log_path).parent
+        return _path_resolution(path, folder or path.name, "HIGH", "validation_log_path")
+    if not folder:
+        return {
+            "archive_folder": "",
+            "archive_path": "",
+            "archive_path_confidence": "UNKNOWN",
+            "archive_path_reason": "no_archive_folder_evidence",
+        }
+
+    path = Path(folder)
+    if path.is_absolute():
+        return _path_resolution(path, folder, "HIGH", "absolute_archive_folder")
+    if archive_root:
+        return _path_resolution(archive_root / path, folder, "HIGH", "archive_root_plus_folder")
+    return {
+        "archive_folder": folder,
+        "archive_path": "",
+        "archive_path_confidence": "MEDIUM",
+        "archive_path_reason": "relative_archive_folder_without_archive_root",
+    }
+
+
+def archive_path_summary(albums: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(albums)
+    known = sum(1 for album in albums if album.get("archive_path"))
+    medium = sum(1 for album in albums if album.get("archive_path_confidence") == "MEDIUM")
+    unknown = sum(1 for album in albums if album.get("archive_path_confidence") == "UNKNOWN")
+    return {
+        "total_albums": total,
+        "known_archive_paths": known,
+        "medium_confidence_paths": medium,
+        "unresolved_archive_paths": unknown,
+        "coverage_percent": _ratio(known, total),
+    }
+
+
+def render_archive_path_resolution_report(library: dict[str, Any]) -> str:
+    albums = library.get("albums", [])
+    summary = archive_path_summary(albums)
+    lines = [
+        "# Archive Path Resolution Report",
+        "",
+        "Archive paths are derived from existing identity and validator evidence. No archive files are modified.",
+        "",
+        "## Summary",
+        "",
+        f"- Total albums: `{summary['total_albums']}`",
+        f"- Albums with known archive paths: `{summary['known_archive_paths']}`",
+        f"- Albums with relative folder evidence only: `{summary['medium_confidence_paths']}`",
+        f"- Albums with unresolved paths: `{summary['unresolved_archive_paths']}`",
+        f"- Coverage: `{summary['coverage_percent']:.1%}`",
+        "",
+        "## Examples",
+        "",
+        "| Confidence | Album ID | Artist | Album | Archive Folder | Archive Path | Reason |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for album in albums[:500]:
+        lines.append(
+            f"| {album.get('archive_path_confidence', 'UNKNOWN')} | `{_escape(album.get('album_id'))}` | "
+            f"{_escape(album.get('artist'))} | {_escape(album.get('title'))} | "
+            f"`{_escape(album.get('archive_folder'))}` | `{_escape(album.get('archive_path'))}` | "
+            f"{_escape(album.get('archive_path_reason'))} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_archive_path_resolution_report(library: dict[str, Any], reports_dir: Path) -> None:
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(reports_dir / "archive_path_resolution_report.md", render_archive_path_resolution_report(library))
 
 
 def library_summary(
@@ -127,7 +218,9 @@ def _album_record(
 ) -> dict[str, Any]:
     album_id = str(lifecycle_row.get("album_id"))
     identity = identity_by_album.get(album_id, {})
-    archive_path = _archive_path(identity, archive_root)
+    path_resolution = resolve_archive_path(identity, archive_root)
+    archive_path_text = path_resolution.get("archive_path", "")
+    archive_path = Path(archive_path_text) if archive_path_text else None
     artifacts = detect_album_artifacts(archive_path) if archive_path else {}
     artist = _metadata_artist(metadata_album) or lifecycle_row.get("artist") or "(unknown)"
     title = metadata_album.get("title") or lifecycle_row.get("title") or "(unknown)"
@@ -151,7 +244,10 @@ def _album_record(
         "identity_confidence": identity.get("identity_confidence", "UNKNOWN"),
         "validation_status": validation_status,
         "metadata_status": "cached" if metadata_album else "missing",
-        "archive_folder": str(archive_path) if archive_path else "",
+        "archive_folder": path_resolution["archive_folder"],
+        "archive_path": path_resolution["archive_path"],
+        "archive_path_confidence": path_resolution["archive_path_confidence"],
+        "archive_path_reason": path_resolution["archive_path_reason"],
         "artifacts": artifacts,
         "album_status": album_status(
             {
@@ -182,19 +278,13 @@ def _album_record(
     }
 
 
-def _archive_path(identity: dict[str, Any], archive_root: Path | None) -> Path | None:
-    folder = identity.get("archive_identity", {}).get("folder")
-    log_path = identity.get("validation", {}).get("validation_log_path")
-    if log_path:
-        return Path(log_path).parent
-    if not folder:
-        return None
-    path = Path(folder)
-    if path.is_absolute():
-        return path
-    if archive_root:
-        return archive_root / path
-    return path
+def _path_resolution(path: Path, folder: str, confidence: str, reason: str) -> dict[str, Any]:
+    return {
+        "archive_folder": folder,
+        "archive_path": str(path),
+        "archive_path_confidence": confidence,
+        "archive_path_reason": reason,
+    }
 
 
 def _artifact_status(details: dict[str, Any], key: str) -> str:
@@ -255,3 +345,7 @@ def _ratio(count: int, total: int) -> float:
     if total == 0:
         return 0.0
     return round(count / total, 4)
+
+
+def _escape(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ").strip()

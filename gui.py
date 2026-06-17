@@ -14,7 +14,12 @@ from audio_division.settings import (
     save_audio_division_settings,
 )
 from audio_division.operation_runner import run_operation
-from audio_division.library import album_details, albums_for_artist, library_from_data_dir
+from audio_division.library import (
+    album_archive_operation_target,
+    album_details,
+    albums_for_artist,
+    library_from_data_dir,
+)
 from audio_division.opportunities import (
     OPPORTUNITY_CATEGORIES,
     filter_opportunities,
@@ -615,6 +620,8 @@ class DeezerCuratorGUI(tk.Tk):
                 details.get("title", ""),
                 f"Artist: {details.get('artist', '')}",
                 f"Archive Folder: {details.get('archive_folder', '')}",
+                f"Archive Path: {details.get('archive_path', '')}",
+                f"Archive Path Confidence: {details.get('archive_path_confidence', 'UNKNOWN')}",
                 f"Year: {details.get('year', '')}",
                 f"Release Date: {details.get('release_date', '')}",
                 f"Label: {details.get('label', '')}",
@@ -644,9 +651,9 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_detail_text.config(state="disabled")
 
     def run_library_album_operation(self, operation_id: str):
-        target = self.library_selected_album.get("archive_folder", "")
+        target, reason = album_archive_operation_target(self.library_selected_album)
         if not target:
-            self.library_operation_result_var.set("Failure: selected album has no archive folder.")
+            self.library_operation_result_var.set(f"Failure: {reason}")
             return
         album_id = self.library_selected_album.get("album_id", "")
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
