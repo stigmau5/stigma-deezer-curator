@@ -56,6 +56,29 @@ class OperationRunnerTests(unittest.TestCase):
         self.assertEqual(result["result"], "success")
         self.assertEqual(history["history"][0]["operation"], "generate_nfo")
 
+    def test_album_operation_invocation_records_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp) / "Artist - Album"
+            album.mkdir()
+            history_path = Path(tmp) / "operation_history.json"
+
+            def runner(command, capture_output, text, timeout):
+                self.assertEqual(command, ["/bin/echo", str(album)])
+                return subprocess.CompletedProcess(command, 0, stdout="album ok", stderr="")
+
+            result = run_operation(
+                "validate_album",
+                str(album),
+                {"tools": {"flac_validator_path": "/bin/echo"}},
+                history_path,
+                runner=runner,
+            )
+            history = load_operation_history(history_path)
+
+        self.assertEqual(result["result"], "success")
+        self.assertEqual(result["message"], "album ok")
+        self.assertEqual(history["history"][0]["target"], str(album))
+
     def test_failure_handling_records_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             history_path = Path(tmp) / "operation_history.json"

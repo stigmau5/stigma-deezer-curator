@@ -7,18 +7,32 @@ from typing import Any
 
 from curator.atomic import atomic_write_text
 
-ARTIFACT_TYPES = ("nfo", "sfv", "playlist", "validation_log")
+ARTIFACT_TYPES = ("nfo", "sfv", "playlist", "artwork", "validation_log")
+ARTWORK_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def detect_album_artifacts(album_path: Path) -> dict[str, Any]:
     files = list(album_path.iterdir()) if album_path.exists() and album_path.is_dir() else []
+    nfo_files = [path for path in files if path.is_file() and path.suffix.lower() == ".nfo"]
+    sfv_files = [path for path in files if path.is_file() and path.suffix.lower() == ".sfv"]
+    playlist_files = [path for path in files if path.is_file() and path.suffix.lower() in {".m3u", ".m3u8"}]
+    artwork_files = [path for path in files if path.is_file() and path.suffix.lower() in ARTWORK_SUFFIXES]
+    validation_files = [path for path in files if path.is_file() and path.name == "STIGMA_VALIDATED.txt"]
     return {
         "folder": str(album_path),
         "exists": album_path.exists(),
-        "nfo": any(path.is_file() and path.suffix.lower() == ".nfo" for path in files),
-        "sfv": any(path.is_file() and path.suffix.lower() == ".sfv" for path in files),
-        "playlist": any(path.is_file() and path.suffix.lower() in {".m3u", ".m3u8"} for path in files),
-        "validation_log": any(path.is_file() and path.name == "STIGMA_VALIDATED.txt" for path in files),
+        "nfo": bool(nfo_files),
+        "sfv": bool(sfv_files),
+        "playlist": bool(playlist_files),
+        "artwork": bool(artwork_files),
+        "validation_log": bool(validation_files),
+        "counts": {
+            "nfo": len(nfo_files),
+            "sfv": len(sfv_files),
+            "playlist": len(playlist_files),
+            "artwork": len(artwork_files),
+            "validation_log": len(validation_files),
+        },
     }
 
 
@@ -68,6 +82,7 @@ def render_archive_artifact_report(report: dict[str, Any]) -> str:
         "nfo": "NFO",
         "sfv": "SFV",
         "playlist": "Playlist",
+        "artwork": "Artwork",
         "validation_log": "Validation Evidence",
     }
     for artifact in ARTIFACT_TYPES:

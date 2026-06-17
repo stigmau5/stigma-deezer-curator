@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from audio_division.library import (
+    album_status,
     album_details,
     albums_for_artist,
     build_library,
@@ -40,6 +41,7 @@ class LibraryBrowserTests(unittest.TestCase):
             "releases": [
                 {
                     "discovery_identity": {"deezer_album_id": "2"},
+                    "archive_identity": {"folder": "Alpha Artist - Cached Album"},
                     "identity_confidence": "HIGH",
                 }
             ]
@@ -87,6 +89,7 @@ class LibraryBrowserTests(unittest.TestCase):
         self.assertEqual(details["validation_status"], "validated")
         self.assertEqual(details["metadata_status"], "cached")
         self.assertEqual(details["genres"], ["Dance"])
+        self.assertEqual(details["album_status"]["items"]["metadata"], "Present")
 
     def test_missing_metadata_fallback(self):
         library = build_library(self.sample_lifecycle(), self.sample_identity(), {"albums": {}, "artists": {}, "tracks": {}})
@@ -94,6 +97,47 @@ class LibraryBrowserTests(unittest.TestCase):
         self.assertEqual(details["artist"], "Beta Artist")
         self.assertEqual(details["title"], "Fallback Album")
         self.assertEqual(details["metadata_status"], "missing")
+
+    def test_album_status_calculation(self):
+        details = {
+            "validation_status": "validated",
+            "metadata_status": "cached",
+            "artifacts": {
+                "exists": True,
+                "nfo": True,
+                "sfv": False,
+                "playlist": True,
+                "artwork": True,
+            },
+            "artwork": {"cover_identity": "cover", "urls": {}},
+        }
+        status = album_status(details)
+        self.assertEqual(status["items"]["validation"], "Present")
+        self.assertEqual(status["items"]["sfv"], "Missing")
+        self.assertEqual(status["health_percent"], 83)
+
+    def test_artifact_detection_in_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp)
+            album_dir = archive_root / "Alpha Artist - Cached Album"
+            album_dir.mkdir()
+            (album_dir / "album.nfo").write_text("nfo")
+            (album_dir / "album.sfv").write_text("sfv")
+            (album_dir / "playlist.m3u8").write_text("playlist")
+            (album_dir / "cover.jpg").write_text("artwork")
+            (album_dir / "STIGMA_VALIDATED.txt").write_text("validated")
+
+            library = build_library(
+                self.sample_lifecycle(),
+                self.sample_identity(),
+                self.sample_metadata(),
+                archive_root,
+            )
+            details = album_details(library, "2")
+
+        self.assertTrue(details["artifacts"]["nfo"])
+        self.assertEqual(details["artifacts"]["counts"]["playlist"], 1)
+        self.assertEqual(details["album_status"]["health_percent"], 100)
 
     def test_registry_loading(self):
         with tempfile.TemporaryDirectory() as tmp:

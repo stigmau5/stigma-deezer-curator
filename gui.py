@@ -86,6 +86,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_artist_rows: list[dict] = []
         self.library_album_rows: list[dict] = []
         self.library_summary_labels: dict[str, ttk.Label] = {}
+        self.library_selected_album: dict = {}
+        self.library_operation_result_var = tk.StringVar()
 
         self._build_layout()
         self.refresh_artists()
@@ -272,6 +274,16 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_detail_text.pack(fill="both", expand=True)
         self.library_detail_text.config(state="disabled")
 
+        operations = ttk.LabelFrame(details_frame, text="Album Operations", padding=6)
+        operations.pack(fill="x", pady=(8, 0))
+        buttons = ttk.Frame(operations)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Validate Album", command=lambda: self.run_library_album_operation("validate_album")).pack(side="left")
+        ttk.Button(buttons, text="Generate NFO", command=lambda: self.run_library_album_operation("generate_nfo")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Generate SFV", command=lambda: self.run_library_album_operation("generate_sfv")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Open Folder", command=lambda: self.run_library_album_operation("open_album_folder")).pack(side="left", padx=(6, 0))
+        ttk.Label(operations, textvariable=self.library_operation_result_var).pack(anchor="w", pady=(6, 0))
+
         self.refresh_library()
 
     def _build_audio_dashboard(self, parent):
@@ -443,7 +455,8 @@ class DeezerCuratorGUI(tk.Tk):
 
     def refresh_library(self):
         try:
-            self.library_data = library_from_data_dir(DATA_DIR)
+            archive_root = self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
+            self.library_data = library_from_data_dir(DATA_DIR, Path(archive_root) if archive_root else None)
         except Exception as exc:
             self.library_data = {"artists": [], "albums": {}, "summary": {}}
             self.status.config(text=f"Library refresh failed: {exc}")
@@ -465,6 +478,7 @@ class DeezerCuratorGUI(tk.Tk):
 
     def clear_library_albums(self):
         self.library_album_rows = []
+        self.library_selected_album = {}
         for item in self.library_album_tree.get_children():
             self.library_album_tree.delete(item)
 
@@ -496,16 +510,22 @@ class DeezerCuratorGUI(tk.Tk):
         if index >= len(self.library_album_rows):
             return
         album_id = self.library_album_rows[index].get("album_id", "")
-        self.set_library_detail(album_details(self.library_data, album_id))
+        self.library_selected_album = album_details(self.library_data, album_id)
+        self.set_library_detail(self.library_selected_album)
 
     def set_library_detail(self, details: dict):
         artwork = details.get("artwork", {}) if details else {}
         signals = details.get("archive_strength_signals", {}) if details else {}
+        status = details.get("album_status", {}) if details else {}
+        status_items = status.get("items", {})
+        counts = details.get("artifacts", {}).get("counts", {}) if details else {}
         lines = []
         if details:
+            urls = artwork.get("urls", {}) if isinstance(artwork.get("urls"), dict) else {}
             lines = [
                 details.get("title", ""),
                 f"Artist: {details.get('artist', '')}",
+                f"Archive Folder: {details.get('archive_folder', '')}",
                 f"Year: {details.get('year', '')}",
                 f"Release Date: {details.get('release_date', '')}",
                 f"Label: {details.get('label', '')}",
@@ -517,13 +537,36 @@ class DeezerCuratorGUI(tk.Tk):
                 f"Validation Status: {details.get('validation_status', '')}",
                 f"Metadata Status: {details.get('metadata_status', '')}",
                 f"Archive Strength Signals: {', '.join(k for k, v in signals.items() if v)}",
-                f"Artwork URL: {artwork.get('url', '')}",
-                f"Artwork Identity: {artwork.get('md5_image', '')}",
+                f"Artwork URL: {artwork.get('url') or urls.get('medium') or urls.get('big') or urls.get('xl') or ''}",
+                f"Artwork Identity: {artwork.get('md5_image') or artwork.get('cover_identity') or ''}",
+                "",
+                "Album Status:",
+                f"Validation: {status_items.get('validation', 'Unknown')}",
+                f"NFO: {status_items.get('nfo', 'Unknown')} ({counts.get('nfo', 0)})",
+                f"SFV: {status_items.get('sfv', 'Unknown')} ({counts.get('sfv', 0)})",
+                f"Playlist: {status_items.get('playlist', 'Unknown')} ({counts.get('playlist', 0)})",
+                f"Artwork: {status_items.get('artwork', 'Unknown')} ({counts.get('artwork', 0)})",
+                f"Metadata: {status_items.get('metadata', 'Unknown')}",
+                f"Album Health: {status.get('health_percent', 0)}%",
             ]
         self.library_detail_text.config(state="normal")
         self.library_detail_text.delete("1.0", tk.END)
         self.library_detail_text.insert(tk.END, "\n".join(lines) or "Select an album.")
         self.library_detail_text.config(state="disabled")
+
+    def run_library_album_operation(self, operation_id: str):
+        target = self.library_selected_album.get("archive_folder", "")
+        if not target:
+            self.library_operation_result_var.set("Failure: selected album has no archive folder.")
+            return
+        album_id = self.library_selected_album.get("album_id", "")
+        result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.library_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
+        self.refresh_library()
+        if album_id:
+            self.library_selected_album = album_details(self.library_data, album_id)
+            self.set_library_detail(self.library_selected_album)
+        self.refresh_audio_dashboard()
 
     def save_audio_settings(self):
         for (section, key), var in self.audio_setting_vars.items():

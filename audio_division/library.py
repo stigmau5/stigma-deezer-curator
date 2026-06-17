@@ -4,6 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from audio_division.artifacts import detect_album_artifacts
 from audio_division.dashboard import load_json
 
 
@@ -15,7 +16,12 @@ def load_library_sources(data_dir: Path) -> dict[str, dict[str, Any]]:
     }
 
 
-def build_library(lifecycle: dict[str, Any], identity: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+def build_library(
+    lifecycle: dict[str, Any],
+    identity: dict[str, Any],
+    metadata: dict[str, Any],
+    archive_root: Path | None = None,
+) -> dict[str, Any]:
     identity_by_album = {
         row.get("discovery_identity", {}).get("deezer_album_id"): row
         for row in identity.get("releases", [])
@@ -23,7 +29,10 @@ def build_library(lifecycle: dict[str, Any], identity: dict[str, Any], metadata:
     }
     metadata_albums = metadata.get("albums", {})
     lifecycle_rows = lifecycle.get("albums", [])
-    albums = [_album_record(row, metadata_albums.get(str(row.get("album_id")), {}), identity_by_album) for row in lifecycle_rows]
+    albums = [
+        _album_record(row, metadata_albums.get(str(row.get("album_id")), {}), identity_by_album, archive_root)
+        for row in lifecycle_rows
+    ]
     artists = build_artist_index(albums, metadata)
 
     return {
@@ -34,9 +43,9 @@ def build_library(lifecycle: dict[str, Any], identity: dict[str, Any], metadata:
     }
 
 
-def library_from_data_dir(data_dir: Path) -> dict[str, Any]:
+def library_from_data_dir(data_dir: Path, archive_root: Path | None = None) -> dict[str, Any]:
     sources = load_library_sources(data_dir)
-    return build_library(sources["lifecycle"], sources["identity"], sources["metadata"])
+    return build_library(sources["lifecycle"], sources["identity"], sources["metadata"], archive_root)
 
 
 def build_artist_index(albums: list[dict[str, Any]], metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -72,6 +81,25 @@ def album_details(library: dict[str, Any], album_id: str) -> dict[str, Any]:
     return {}
 
 
+def album_status(details: dict[str, Any]) -> dict[str, Any]:
+    if not details:
+        return {"items": {}, "health_percent": 0}
+    items = {
+        "validation": _present_missing_unknown(details.get("validation_status") == "validated", details.get("validation_status")),
+        "nfo": _artifact_status(details, "nfo"),
+        "sfv": _artifact_status(details, "sfv"),
+        "playlist": _artifact_status(details, "playlist"),
+        "artwork": _artwork_status(details),
+        "metadata": _present_missing_unknown(details.get("metadata_status") == "cached", details.get("metadata_status")),
+    }
+    known = [value for value in items.values() if value != "Unknown"]
+    present = sum(1 for value in known if value == "Present")
+    return {
+        "items": items,
+        "health_percent": round((present / len(known)) * 100) if known else 0,
+    }
+
+
 def library_summary(
     artists: list[dict[str, Any]],
     albums: list[dict[str, Any]],
@@ -95,9 +123,12 @@ def _album_record(
     lifecycle_row: dict[str, Any],
     metadata_album: dict[str, Any],
     identity_by_album: dict[str, dict[str, Any]],
+    archive_root: Path | None,
 ) -> dict[str, Any]:
     album_id = str(lifecycle_row.get("album_id"))
     identity = identity_by_album.get(album_id, {})
+    archive_path = _archive_path(identity, archive_root)
+    artifacts = detect_album_artifacts(archive_path) if archive_path else {}
     artist = _metadata_artist(metadata_album) or lifecycle_row.get("artist") or "(unknown)"
     title = metadata_album.get("title") or lifecycle_row.get("title") or "(unknown)"
     states = lifecycle_row.get("states", {})
@@ -120,17 +151,72 @@ def _album_record(
         "identity_confidence": identity.get("identity_confidence", "UNKNOWN"),
         "validation_status": validation_status,
         "metadata_status": "cached" if metadata_album else "missing",
+        "archive_folder": str(archive_path) if archive_path else "",
+        "artifacts": artifacts,
+        "album_status": album_status(
+            {
+                "validation_status": validation_status,
+                "metadata_status": "cached" if metadata_album else "missing",
+                "artifacts": artifacts,
+                "artwork": {
+                    "cover_identity": metadata_album.get("cover_identity"),
+                    "urls": covers,
+                    "local": artifacts.get("artwork") if artifacts else None,
+                },
+            }
+        ),
         "archive_strength_signals": {
             "has_identity": identity.get("identity_confidence") == "HIGH",
             "has_validation": validation_status == "validated",
             "has_metadata": bool(metadata_album),
+            "has_nfo": artifacts.get("nfo", False),
+            "has_sfv": artifacts.get("sfv", False),
+            "has_playlist": artifacts.get("playlist", False),
+            "has_artwork": artifacts.get("artwork", False) or bool(covers),
         },
         "artwork": {
             "cover_identity": metadata_album.get("cover_identity"),
             "urls": covers,
-            "local": None,
+            "local": artifacts.get("artwork") if artifacts else None,
         },
     }
+
+
+def _archive_path(identity: dict[str, Any], archive_root: Path | None) -> Path | None:
+    folder = identity.get("archive_identity", {}).get("folder")
+    log_path = identity.get("validation", {}).get("validation_log_path")
+    if log_path:
+        return Path(log_path).parent
+    if not folder:
+        return None
+    path = Path(folder)
+    if path.is_absolute():
+        return path
+    if archive_root:
+        return archive_root / path
+    return path
+
+
+def _artifact_status(details: dict[str, Any], key: str) -> str:
+    artifacts = details.get("artifacts", {})
+    if not artifacts or not artifacts.get("exists"):
+        return "Unknown"
+    return "Present" if artifacts.get(key) else "Missing"
+
+
+def _artwork_status(details: dict[str, Any]) -> str:
+    artifacts = details.get("artifacts", {})
+    artwork = details.get("artwork", {})
+    has_metadata_artwork = bool(artwork.get("cover_identity") or artwork.get("urls"))
+    if artifacts and artifacts.get("exists"):
+        return "Present" if artifacts.get("artwork") or has_metadata_artwork else "Missing"
+    return "Present" if has_metadata_artwork else "Unknown"
+
+
+def _present_missing_unknown(is_present: bool, raw_value: Any) -> str:
+    if raw_value in (None, "", "unknown"):
+        return "Unknown"
+    return "Present" if is_present else "Missing"
 
 
 def _albums_by_artist(albums: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
