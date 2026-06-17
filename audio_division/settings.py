@@ -23,6 +23,12 @@ DEFAULT_SETTINGS = {
     "reports": {
         "reports_directory": "reports",
     },
+    "tools": {
+        "nfo_generator_path": "",
+        "sfv_generator_path": "",
+        "flac_validator_path": "",
+        "file_manager_path": "xdg-open",
+    },
 }
 
 

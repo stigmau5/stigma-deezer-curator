@@ -13,6 +13,7 @@ from audio_division.settings import (
     load_audio_division_settings,
     save_audio_division_settings,
 )
+from audio_division.operation_runner import run_operation
 
 # ---------------- Base paths ----------------
 
@@ -24,6 +25,7 @@ LOG = DATA_DIR / "curated.log"
 ARTISTS_DIR = DATA_DIR / "artists"
 SHIPPED_DIR = DATA_DIR / "shipped"
 AUDIO_DIVISION_SETTINGS_FILE = DATA_DIR / "audio_division_settings.json"
+OPERATION_HISTORY_FILE = DATA_DIR / "operation_history.json"
 META_FILE = DATA_DIR / "artist_meta.json"
 
 STREAMRIP_BIN = Path(
@@ -77,6 +79,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
         self.dashboard_value_labels: dict[str, ttk.Label] = {}
         self.action_detail = None
+        self.operation_history_detail = None
+        self.operation_target_var = tk.StringVar()
 
         self._build_layout()
         self.refresh_artists()
@@ -257,6 +261,9 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_operations.open_album_folder", "Open Album Folder"),
                 ("archive_operations.refresh_metadata", "Refresh Metadata"),
             ]),
+            ("Recent Operations", [
+                ("recent_operations.operation_count", "History Entries"),
+            ]),
         ]
 
         for idx, (title, fields) in enumerate(sections):
@@ -277,6 +284,24 @@ class DeezerCuratorGUI(tk.Tk):
         self.action_detail.pack(fill="x")
         self.action_detail.config(state="disabled")
 
+        operations = ttk.LabelFrame(parent, text="Operation Test Controls", padding=8)
+        operations.pack(fill="x", pady=(10, 0))
+        ttk.Label(operations, text="Target folder").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=2)
+        ttk.Entry(operations, textvariable=self.operation_target_var).grid(row=0, column=1, sticky="ew", pady=2)
+        operations.columnconfigure(1, weight=1)
+        buttons = ttk.Frame(operations)
+        buttons.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Button(buttons, text="Generate NFO", command=lambda: self.run_archive_operation("generate_nfo")).pack(side="left")
+        ttk.Button(buttons, text="Generate SFV", command=lambda: self.run_archive_operation("generate_sfv")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Validate Album", command=lambda: self.run_archive_operation("validate_album")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Open Folder", command=lambda: self.run_archive_operation("open_album_folder")).pack(side="left", padx=(6, 0))
+
+        history = ttk.LabelFrame(parent, text="Recent Operations", padding=8)
+        history.pack(fill="x", pady=(10, 0))
+        self.operation_history_detail = tk.Text(history, height=5, wrap="word")
+        self.operation_history_detail.pack(fill="x")
+        self.operation_history_detail.config(state="disabled")
+
         self.refresh_audio_dashboard()
 
     def _build_settings_tab(self, parent):
@@ -289,6 +314,10 @@ class DeezerCuratorGUI(tk.Tk):
             ("validator", "validation_log_root", "Validation Log Root"),
             ("metadata", "metadata_cache_path", "Metadata Cache Path"),
             ("reports", "reports_directory", "Reports Directory"),
+            ("tools", "nfo_generator_path", "NFO Generator Path"),
+            ("tools", "sfv_generator_path", "SFV Generator Path"),
+            ("tools", "flac_validator_path", "FLAC Validator Path"),
+            ("tools", "file_manager_path", "File Manager Path"),
         ]
         form = ttk.Frame(parent)
         form.pack(fill="both", expand=True)
@@ -322,6 +351,22 @@ class DeezerCuratorGUI(tk.Tk):
             self.action_detail.delete("1.0", tk.END)
             self.action_detail.insert(tk.END, details or "No archive actions found.")
             self.action_detail.config(state="disabled")
+        if self.operation_history_detail is not None:
+            items = summary.get("recent_operations", {}).get("items", [])
+            text = "\n".join(
+                f"{item.get('timestamp', '')}  {item.get('operation', '')}  {item.get('result', '')}"
+                for item in items
+            )
+            self.operation_history_detail.config(state="normal")
+            self.operation_history_detail.delete("1.0", tk.END)
+            self.operation_history_detail.insert(tk.END, text or "No operations recorded.")
+            self.operation_history_detail.config(state="disabled")
+
+    def run_archive_operation(self, operation_id: str):
+        target = self.operation_target_var.get().strip()
+        result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.status.config(text=f"{operation_id}: {result['result']} - {result['message']}")
+        self.refresh_audio_dashboard()
 
     def save_audio_settings(self):
         for (section, key), var in self.audio_setting_vars.items():

@@ -23,6 +23,7 @@ def load_dashboard_sources(data_dir: Path) -> dict[str, dict[str, Any]]:
         "lifecycle": load_json(data_dir / "lifecycle_registry.json"),
         "identity": load_json(data_dir / "identity_registry.json"),
         "metadata": load_json(data_dir / "metadata_cache.json"),
+        "operation_history": load_json(data_dir / "operation_history.json"),
     }
 
 
@@ -32,6 +33,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
         sources["lifecycle"],
         sources["identity"],
         sources["metadata"],
+        sources["operation_history"],
     )
 
 
@@ -39,6 +41,7 @@ def compute_dashboard_summary(
     lifecycle: dict[str, Any],
     identity: dict[str, Any],
     metadata: dict[str, Any],
+    operation_history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lifecycle_summary = lifecycle.get("summary", {})
     state_counts = lifecycle_summary.get("state_evidence_counts", {})
@@ -62,6 +65,7 @@ def compute_dashboard_summary(
     actions_summary = action_summary(actions)
     operations_summary = operation_summary(actions)
     first_action = actions[0] if actions else {}
+    history = (operation_history or {}).get("history", [])
 
     return {
         "archive_overview": {
@@ -107,6 +111,10 @@ def compute_dashboard_summary(
         "archive_operations": {
             "operation_count": operations_summary["total_operations"],
             **operations_summary["candidate_counts"],
+        },
+        "recent_operations": {
+            "operation_count": len(history),
+            "items": history[:5],
         },
     }
 

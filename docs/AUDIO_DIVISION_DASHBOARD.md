@@ -24,6 +24,8 @@ It shows:
 - archive health gaps
 - archive action counts and first recommended action details
 - archive operation candidate counts
+- recent operation history
+- manual operation test controls
 
 ## Data Sources
 
@@ -51,6 +53,10 @@ Settings currently support:
 - validation log root
 - metadata cache path
 - reports directory
+- NFO generator path
+- SFV generator path
+- FLAC validator path
+- file manager path
 
 The settings file is written atomically.
 
