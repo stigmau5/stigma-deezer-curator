@@ -31,22 +31,27 @@ def load_dashboard_sources(data_dir: Path) -> dict[str, dict[str, Any]]:
 def dashboard_summary(data_dir: Path) -> dict[str, Any]:
     sources = load_dashboard_sources(data_dir)
     readiness = {}
+    hub_opportunities = {}
     try:
         from audio_division.library import library_from_data_dir
+        from audio_division.opportunities import derive_hub_opportunities, hub_opportunity_summary
         from audio_division.settings import load_audio_division_settings
 
         settings = load_audio_division_settings(data_dir / "audio_division_settings.json")
         archive_root = settings.get("archive_paths", {}).get("main_archive_root", "")
         library = library_from_data_dir(data_dir, Path(archive_root) if archive_root else None)
         readiness = library.get("archive_readiness_summary", {})
+        hub_opportunities = hub_opportunity_summary(derive_hub_opportunities(library))
     except Exception:
         readiness = {}
+        hub_opportunities = {}
     return compute_dashboard_summary(
         sources["lifecycle"],
         sources["identity"],
         sources["metadata"],
         sources["operation_history"],
         readiness,
+        hub_opportunities,
     )
 
 
@@ -56,6 +61,7 @@ def compute_dashboard_summary(
     metadata: dict[str, Any],
     operation_history: dict[str, Any] | None = None,
     readiness_summary: dict[str, Any] | None = None,
+    hub_opportunity_summary_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lifecycle_summary = lifecycle.get("summary", {})
     state_counts = lifecycle_summary.get("state_evidence_counts", {})
@@ -82,6 +88,7 @@ def compute_dashboard_summary(
     first_action = actions[0] if actions else {}
     history = (operation_history or {}).get("history", [])
     readiness_counts = (readiness_summary or {}).get("counts", {})
+    hub_counts = (hub_opportunity_summary_data or {}).get("by_category", {})
 
     return {
         "archive_overview": {
@@ -128,6 +135,14 @@ def compute_dashboard_summary(
             "needs_documentation": readiness_counts.get("NEEDS_DOCUMENTATION", 0),
             "needs_review": readiness_counts.get("NEEDS_REVIEW", 0),
             "unknown": readiness_counts.get("UNKNOWN", 0),
+        },
+        "top_opportunities": {
+            "needs_validation": hub_counts.get("NEEDS_VALIDATION", 0),
+            "needs_documentation": hub_counts.get("NEEDS_DOCUMENTATION", 0),
+            "needs_metadata": hub_counts.get("NEEDS_METADATA", 0),
+            "needs_review": hub_counts.get("NEEDS_REVIEW", 0),
+            "archive_ready": hub_counts.get("ARCHIVE_READY", 0),
+            "most_urgent_category": (hub_opportunity_summary_data or {}).get("most_urgent_category", ""),
         },
         "archive_actions": {
             "action_count": actions_summary["total_actions"],

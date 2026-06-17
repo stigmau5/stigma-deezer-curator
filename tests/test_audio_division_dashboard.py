@@ -72,6 +72,18 @@ class AudioDivisionDashboardTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["missing"], 1)
         self.assertEqual(summary["metadata"]["available_not_cached"], 7)
 
+        with_opportunities = compute_dashboard_summary(
+            lifecycle,
+            identity,
+            metadata,
+            hub_opportunity_summary_data={
+                "by_category": {"NEEDS_VALIDATION": 2, "NEEDS_DOCUMENTATION": 1},
+                "most_urgent_category": "NEEDS_VALIDATION",
+            },
+        )
+        self.assertEqual(with_opportunities["top_opportunities"]["needs_validation"], 2)
+        self.assertEqual(with_opportunities["top_opportunities"]["most_urgent_category"], "NEEDS_VALIDATION")
+
     def test_settings_save_and_load(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "audio_division_settings.json"

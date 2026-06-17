@@ -27,9 +27,13 @@ from audio_division.library import (
     library_from_data_dir,
 )
 from audio_division.opportunities import (
+    HUB_OPPORTUNITY_CATEGORIES,
     OPPORTUNITY_CATEGORIES,
+    derive_hub_opportunities,
     filter_opportunities,
     generate_opportunities,
+    group_hub_opportunities,
+    hub_opportunity_summary,
     opportunity_summary,
 )
 
@@ -112,6 +116,11 @@ class DeezerCuratorGUI(tk.Tk):
         self.opportunity_priority_var = tk.StringVar(value="")
         self.opportunity_artist_var = tk.StringVar()
         self.batch_progress_var = tk.StringVar(value="No batch running.")
+        self.hub_opportunity_rows: list[dict] = []
+        self.hub_opportunity_groups: dict[str, list[dict]] = {}
+        self.hub_selected_category = tk.StringVar(value="NEEDS_REVIEW")
+        self.hub_summary_labels: dict[str, ttk.Label] = {}
+        self.hub_action_result_var = tk.StringVar(value="")
 
         self._build_layout()
         self.refresh_artists()
@@ -136,6 +145,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         opportunities_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(opportunities_tab, text="Archive Opportunities")
+
+        hub_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(hub_tab, text="Opportunities")
 
         settings_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(settings_tab, text="Settings")
@@ -239,6 +251,7 @@ class DeezerCuratorGUI(tk.Tk):
         self._build_audio_dashboard(audio_tab)
         self._build_library_tab(library_tab)
         self._build_opportunities_tab(opportunities_tab)
+        self._build_hub_opportunities_tab(hub_tab)
         self._build_settings_tab(settings_tab)
 
     def _build_library_tab(self, parent):
@@ -392,6 +405,59 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.refresh_opportunities()
 
+    def _build_hub_opportunities_tab(self, parent):
+        summary = ttk.LabelFrame(parent, text="Top Opportunities", padding=8)
+        summary.pack(fill="x", pady=(0, 10))
+        for col, (key, label) in enumerate(
+            (
+                ("NEEDS_VALIDATION", "Needs Validation"),
+                ("NEEDS_DOCUMENTATION", "Needs Documentation"),
+                ("NEEDS_METADATA", "Needs Metadata"),
+                ("NEEDS_REVIEW", "Needs Review"),
+                ("ARCHIVE_READY", "Archive Ready"),
+            )
+        ):
+            ttk.Label(summary, text=label).grid(row=0, column=col * 2, sticky="w", padx=(0, 6))
+            value = ttk.Label(summary, text="0")
+            value.grid(row=0, column=col * 2 + 1, sticky="w", padx=(0, 18))
+            self.hub_summary_labels[key] = value
+
+        panes = ttk.Panedwindow(parent, orient="horizontal")
+        panes.pack(fill="both", expand=True)
+
+        categories = ttk.LabelFrame(panes, text="Categories", padding=6)
+        panes.add(categories, weight=1)
+        self.hub_category_list = tk.Listbox(categories, exportselection=False)
+        self.hub_category_list.pack(fill="both", expand=True)
+        self.hub_category_list.bind("<<ListboxSelect>>", self.on_hub_category_selected)
+
+        albums = ttk.LabelFrame(panes, text="Albums", padding=6)
+        panes.add(albums, weight=4)
+        columns = ("artist", "album", "lifecycle", "readiness", "priority", "reason")
+        self.hub_album_tree = ttk.Treeview(albums, columns=columns, show="headings", selectmode="browse")
+        headings = [
+            ("artist", "Artist", 160),
+            ("album", "Album", 230),
+            ("lifecycle", "Lifecycle State", 110),
+            ("readiness", "Archive Readiness", 130),
+            ("priority", "Priority", 80),
+            ("reason", "Reason", 280),
+        ]
+        for column, text, width in headings:
+            self.hub_album_tree.heading(column, text=text)
+            self.hub_album_tree.column(column, width=width, anchor="w")
+        self.hub_album_tree.pack(fill="both", expand=True)
+
+        actions = ttk.LabelFrame(parent, text="Actions", padding=8)
+        actions.pack(fill="x", pady=(10, 0))
+        ttk.Button(actions, text="Validate Album", command=lambda: self.run_hub_opportunity_action("validate_album")).pack(side="left")
+        ttk.Button(actions, text="Generate Documentation", command=lambda: self.run_hub_opportunity_action("generate_nfo")).pack(side="left", padx=(6, 0))
+        ttk.Button(actions, text="Refresh Metadata", command=lambda: self.run_hub_opportunity_action("refresh_metadata")).pack(side="left", padx=(6, 0))
+        ttk.Button(actions, text="Open Folder", command=lambda: self.run_hub_opportunity_action("open_album_folder")).pack(side="left", padx=(6, 0))
+        ttk.Label(actions, textvariable=self.hub_action_result_var).pack(side="left", padx=(12, 0))
+
+        self.refresh_hub_opportunities()
+
     def _build_audio_dashboard(self, parent):
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 10))
@@ -447,6 +513,14 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_readiness.needs_documentation", "Needs Documentation"),
                 ("archive_readiness.needs_review", "Needs Review"),
                 ("archive_readiness.unknown", "Unknown"),
+            ]),
+            ("Top Opportunities", [
+                ("top_opportunities.needs_validation", "Needs Validation"),
+                ("top_opportunities.needs_documentation", "Needs Documentation"),
+                ("top_opportunities.needs_metadata", "Needs Metadata"),
+                ("top_opportunities.needs_review", "Needs Review"),
+                ("top_opportunities.archive_ready", "Archive Ready"),
+                ("top_opportunities.most_urgent_category", "Most Urgent"),
             ]),
             ("Archive Actions", [
                 ("archive_actions.action_count", "Action Count"),
@@ -596,6 +670,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_library_detail({})
         if hasattr(self, "opportunity_tree"):
             self.refresh_opportunities()
+        if hasattr(self, "hub_category_list"):
+            self.refresh_hub_opportunities()
 
     def clear_library_albums(self):
         self.library_album_rows = []
@@ -835,6 +911,77 @@ class DeezerCuratorGUI(tk.Tk):
             f"Completed {summary['operation']}: {summary['successes']} succeeded, "
             f"{summary['failures']} failed, {summary.get('skipped', 0)} skipped."
         )
+        self.refresh_audio_dashboard()
+
+    def refresh_hub_opportunities(self):
+        if not hasattr(self, "hub_category_list"):
+            return
+        if not self.library_data:
+            self.refresh_library()
+        opportunities = derive_hub_opportunities(self.library_data)
+        self.hub_opportunity_groups = group_hub_opportunities(opportunities)
+        summary = hub_opportunity_summary(opportunities)
+        for key, label in self.hub_summary_labels.items():
+            label.config(text=str(summary["by_category"].get(key, 0)))
+        self.hub_category_list.delete(0, tk.END)
+        for category in HUB_OPPORTUNITY_CATEGORIES:
+            self.hub_category_list.insert(tk.END, f"{category} ({summary['by_category'].get(category, 0)})")
+        current = self.hub_selected_category.get()
+        index = HUB_OPPORTUNITY_CATEGORIES.index(current) if current in HUB_OPPORTUNITY_CATEGORIES else 0
+        self.hub_category_list.selection_set(index)
+        self.hub_category_list.see(index)
+        self.render_hub_category(current)
+
+    def on_hub_category_selected(self, event=None):
+        selection = self.hub_category_list.curselection()
+        if not selection:
+            return
+        category = HUB_OPPORTUNITY_CATEGORIES[selection[0]]
+        self.hub_selected_category.set(category)
+        self.render_hub_category(category)
+
+    def render_hub_category(self, category: str):
+        self.hub_opportunity_rows = self.hub_opportunity_groups.get(category, [])
+        for item in self.hub_album_tree.get_children():
+            self.hub_album_tree.delete(item)
+        for index, row in enumerate(self.hub_opportunity_rows):
+            self.hub_album_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(
+                    row.get("artist", ""),
+                    row.get("album", ""),
+                    row.get("lifecycle_state", ""),
+                    row.get("archive_readiness", ""),
+                    row.get("priority", ""),
+                    row.get("reason", ""),
+                ),
+            )
+
+    def selected_hub_opportunity(self) -> dict:
+        selection = self.hub_album_tree.selection()
+        if not selection:
+            return {}
+        index = int(selection[0])
+        if index >= len(self.hub_opportunity_rows):
+            return {}
+        return self.hub_opportunity_rows[index]
+
+    def run_hub_opportunity_action(self, operation_id: str):
+        opportunity = self.selected_hub_opportunity()
+        if not opportunity:
+            self.hub_action_result_var.set("Select an album first.")
+            return
+        details = album_details(self.library_data, opportunity.get("album_id", ""))
+        target, reason = album_archive_operation_target(details)
+        if operation_id == "refresh_metadata" and not target:
+            target = opportunity.get("album_id", "")
+        if not target:
+            self.hub_action_result_var.set(f"Failure: {reason}")
+            return
+        result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.hub_action_result_var.set(f"{result['result'].title()}: {result['message']}")
         self.refresh_audio_dashboard()
 
     def save_audio_settings(self):
