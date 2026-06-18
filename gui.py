@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from datetime import datetime
-import base64
 import subprocess
 import json
 import re
@@ -31,6 +30,7 @@ from audio_division.batch_operations import (
 )
 from audio_division.album_workspace import album_workspace
 from audio_division.artwork_browser import artwork_items, filter_artwork_items
+from audio_division.cover_widget import CoverWidget
 from audio_division.physical_archive import (
     albums_for_archive_artist,
     archive_tree,
@@ -1471,48 +1471,7 @@ class DeezerCuratorGUI(tk.Tk):
         )
 
     def _set_album_cover(self, label: tk.Label, status_label: ttk.Label, thumbnail: dict):
-        status = thumbnail.get("status", "Missing")
-        display = thumbnail.get("display", "")
-        status_label.config(text=f"Artwork: {status} - {display}")
-        path = thumbnail.get("path")
-        if path:
-            try:
-                image = self._load_album_cover(path, label)
-                label.config(image=image, text="")
-                return image
-            except (tk.TclError, OSError, subprocess.SubprocessError):
-                pass
-        label.config(image="", text="No artwork" if status == "Missing" else "Artwork")
-        return None
-
-    def _load_album_cover(self, path: str, label: tk.Label) -> tk.PhotoImage:
-        try:
-            return self._fit_album_cover(tk.PhotoImage(file=path), label)
-        except tk.TclError:
-            return self._load_converted_album_cover(path, label)
-
-    def _load_converted_album_cover(self, path: str, label: tk.Label) -> tk.PhotoImage:
-        max_size = self._album_cover_max_size(label)
-        result = subprocess.run(
-            ["convert", str(path), "-auto-orient", "-resize", f"{max_size}x{max_size}", "png:-"],
-            check=True,
-            capture_output=True,
-        )
-        data = base64.b64encode(result.stdout).decode("ascii")
-        return tk.PhotoImage(data=data)
-
-    def _fit_album_cover(self, image: tk.PhotoImage, label: tk.Label, fallback_size: int = 320) -> tk.PhotoImage:
-        max_size = self._album_cover_max_size(label, fallback_size)
-        largest = max(image.width(), image.height())
-        factor = max(1, (largest + max_size - 1) // max_size)
-        return image.subsample(factor, factor) if factor > 1 else image
-
-    def _album_cover_max_size(self, label: tk.Label, fallback_size: int = 320) -> int:
-        label.update_idletasks()
-        max_size = min(label.winfo_width(), label.winfo_height())
-        if max_size < 80:
-            max_size = fallback_size
-        return max_size
+        return CoverWidget(label, status_label).render(thumbnail)
 
     def _build_scrolled_text(self, parent) -> tk.Text:
         frame = ttk.Frame(parent)

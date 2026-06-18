@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from audio_division.cover_widget import album_cover_info
+
 
 PRESENTATION_SECTIONS = ("overview", "artwork", "archive_status", "metadata", "identity")
 
@@ -58,30 +60,8 @@ def album_presentation(details: dict[str, Any]) -> dict[str, Any]:
 
 
 def thumbnail_info(details: dict[str, Any]) -> dict[str, Any]:
-    artwork = details.get("artwork", {}) if isinstance(details.get("artwork"), dict) else {}
-    local = artwork.get("local")
-    urls = artwork.get("urls", {}) if isinstance(artwork.get("urls"), dict) else {}
-    local_path = Path(local) if isinstance(local, (str, Path)) and local else None
-    if local_path and local_path.exists() and local_path.is_file():
-        return {
-            "status": "Present",
-            "source": "local",
-            "path": str(local_path),
-            "url": "",
-            "display": local_path.name,
-        }
-
-    url = urls.get("medium") or urls.get("big") or urls.get("xl") or urls.get("small") or ""
-    if url:
-        return {
-            "status": "Present",
-            "source": "metadata_url",
-            "path": "",
-            "url": url,
-            "display": url,
-        }
-
-    return {"status": "Missing", "source": "none", "path": "", "url": "", "display": "No artwork available"}
+    archive_path = Path(details.get("archive_path", "")) if details.get("archive_path") else None
+    return album_cover_info(details, archive_path)
 
 
 def _documentation_status(status_items: dict[str, Any]) -> str:
@@ -107,6 +87,4 @@ def _artwork_source(details: dict[str, Any]) -> str:
     info = thumbnail_info(details)
     if info["source"] == "local":
         return f"Local: {info['display']}"
-    if info["source"] == "metadata_url":
-        return "Metadata URL"
     return "None"

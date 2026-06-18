@@ -84,7 +84,7 @@ class ArtworkBrowserTests(unittest.TestCase):
         by_id = {item["album_id"]: item for item in items}
         self.assertEqual(by_id["1"]["artwork_source"], "local")
         self.assertEqual(by_id["2"]["artwork_source"], "none")
-        self.assertEqual(by_id["3"]["artwork_source"], "metadata_url")
+        self.assertEqual(by_id["3"]["artwork_source"], "none")
 
     def test_archive_registry_artwork_discovery(self):
         with tempfile.TemporaryDirectory() as tmp:

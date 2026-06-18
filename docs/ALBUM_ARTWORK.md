@@ -21,9 +21,15 @@ If none of those files exist, the first supported image file is used as a fallba
 1. Archive scanning records whether artwork exists and which file was selected.
 2. Library and Archive album projections carry the selected local artwork path.
 3. Album Workspace resolves the cover.
-4. The GUI renders the cover through a shared album-cover renderer.
+4. The GUI renders the cover through `CoverWidget`, a shared album-cover renderer.
 
 The placeholder remains visible when no local artwork is available.
+
+## CoverWidget
+
+`audio_division.cover_widget.CoverWidget` is the reusable GUI boundary for album covers. Archive and Library workspaces both use it so missing artwork, image loading failures, and image scaling behave consistently.
+
+`CoverWidget` only renders local filesystem artwork. It does not fetch, download, edit, or cache artwork.
 
 ## Relationship To Artwork Tab
 

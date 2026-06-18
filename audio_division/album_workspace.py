@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from audio_division.album_presentation import album_presentation, thumbnail_info
-from audio_division.artifacts import select_artwork_file
+from audio_division.album_presentation import album_presentation
 from audio_division.archive_registry import AUDIO_SUFFIXES
+from audio_division.cover_widget import album_cover_info
 
 PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
 NFO_READ_LIMIT = 20000
@@ -29,18 +29,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
 
 
 def cover_info(details: dict[str, Any], archive_path: Path | None = None) -> dict[str, Any]:
-    info = thumbnail_info(details)
-    if info.get("source") == "none" and archive_path:
-        artwork = select_artwork_file(archive_path)
-        if artwork:
-            return {
-                "status": "Present",
-                "source": "local",
-                "path": str(artwork),
-                "display": artwork.name,
-                "url": "",
-            }
-    return info
+    return album_cover_info(details, archive_path)
 
 
 def nfo_info(archive_path: Path | None) -> dict[str, Any]:
