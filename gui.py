@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from datetime import datetime
+import base64
 import subprocess
 import json
 import re
@@ -94,6 +95,34 @@ def record_created(filename: str):
     if filename not in meta["created"]:
         meta["created"][filename] = datetime.now().isoformat()
         save_meta(meta)
+
+
+class Tooltip:
+    def __init__(self, widget, text: str = ""):
+        self.widget = widget
+        self.text = text
+        self.window = None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def set_text(self, text: str):
+        self.text = text
+
+    def show(self, event=None):
+        if not self.text or self.window is not None:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(f"+{x}+{y}")
+        label = ttk.Label(self.window, text=self.text, relief="solid", padding=4, wraplength=900)
+        label.pack()
+
+    def hide(self, event=None):
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
 
 
 # ---------------- GUI ----------------
@@ -460,6 +489,8 @@ class DeezerCuratorGUI(tk.Tk):
         cover_box.pack_propagate(False)
         self.archive_thumbnail = tk.Label(cover_box, text="No artwork", anchor="center", relief="sunken", bg="white")
         self.archive_thumbnail.pack(fill="both", expand=True)
+        self.archive_cover_title = ttk.Label(visual, text="", anchor="center", justify="center", wraplength=280)
+        self.archive_cover_title.pack(fill="x", pady=(0, 8))
         self.archive_artwork_status = ttk.Label(visual, text="Artwork: Unknown", wraplength=280)
         self.archive_artwork_status.pack(anchor="w", fill="x", pady=(0, 8))
 
@@ -505,6 +536,9 @@ class DeezerCuratorGUI(tk.Tk):
                 value.grid(row=field_row, column=1, sticky="ew", pady=1)
                 frame.columnconfigure(1, weight=1)
                 self.archive_presentation_labels[(section_id, field)] = value
+                if section_id == "identity" and field == "Archive path":
+                    self.archive_path_label = value
+                    self.archive_path_tooltip = Tooltip(value)
         for hidden_field in ("Cached fields", "Missing fields"):
             self.archive_presentation_labels[("metadata", hidden_field)] = ttk.Label(details)
 
@@ -955,16 +989,16 @@ class DeezerCuratorGUI(tk.Tk):
         if hasattr(self, "artwork_tree"):
             self.refresh_artwork_browser()
 
-    def refresh_archive_browser(self):
+    def refresh_archive_browser(self, restore_album_key: str = "", restore_artist_key: str = ""):
         if not hasattr(self, "archive_tree"):
             return
         registry = load_json(DATA_DIR / "archive_registry.json")
         identity = load_json(DATA_DIR / "identity_registry.json")
         metadata = load_json(DATA_DIR / "metadata_cache.json")
         self.archive_albums = build_archive_albums(registry, identity, metadata)
-        self.apply_archive_filters()
+        self.apply_archive_filters(restore_album_key=restore_album_key, restore_artist_key=restore_artist_key)
 
-    def apply_archive_filters(self):
+    def apply_archive_filters(self, restore_album_key: str = "", restore_artist_key: str = ""):
         self.filtered_archive_albums = filter_archive_albums(
             self.archive_albums,
             artist=self.archive_artist_var.get(),
@@ -984,6 +1018,13 @@ class DeezerCuratorGUI(tk.Tk):
                 iid=f"artist:{row['artist_key']}",
                 text=f"{row['artist']} ({row['album_count']})",
             )
+        if restore_artist_key:
+            artist_iid = f"artist:{restore_artist_key}"
+            if self.archive_tree.exists(artist_iid):
+                self.archive_tree.selection_set(artist_iid)
+                self.archive_tree.see(artist_iid)
+                self._load_archive_artist_albums(restore_artist_key, restore_album_key)
+                return
         self.clear_archive_albums()
 
     def clear_archive_albums(self):
@@ -1001,15 +1042,21 @@ class DeezerCuratorGUI(tk.Tk):
         if not str(item).startswith("artist:"):
             return
         artist_key = str(item).split(":", 1)[1]
+        self._load_archive_artist_albums(artist_key)
+
+    def _load_archive_artist_albums(self, artist_key: str, restore_album_key: str = ""):
         self.archive_album_rows = albums_for_archive_artist(self.filtered_archive_albums, artist_key)
         for existing in self.archive_album_tree.get_children():
             self.archive_album_tree.delete(existing)
-        for row in self.archive_album_rows:
+        restored_iid = ""
+        for index, row in enumerate(self.archive_album_rows):
             readiness = row.get("archive_readiness", {})
             status = row.get("album_status", {}).get("items", {})
+            iid = str(index)
             self.archive_album_tree.insert(
                 "",
                 tk.END,
+                iid=iid,
                 values=(
                     row.get("title", ""),
                     row.get("year", ""),
@@ -1017,6 +1064,15 @@ class DeezerCuratorGUI(tk.Tk):
                     readiness.get("state", "UNKNOWN"),
                 ),
             )
+            if restore_album_key and self._archive_album_key(row) == restore_album_key:
+                restored_iid = iid
+        if restored_iid:
+            self.archive_album_tree.selection_set(restored_iid)
+            self.archive_album_tree.see(restored_iid)
+            self.archive_selected_album = self.archive_album_rows[int(restored_iid)]
+            self.set_archive_detail(self.archive_selected_album)
+            return
+        self.archive_selected_album = {}
         self.set_archive_detail({})
 
     def on_archive_album_selected(self, event=None):
@@ -1040,6 +1096,12 @@ class DeezerCuratorGUI(tk.Tk):
                     value = item_value
                     break
             label.config(text=str(value or ""))
+        title = str(details.get("title") or "")
+        self.archive_cover_title.config(text=title)
+        full_path = str(details.get("archive_path") or "")
+        if hasattr(self, "archive_path_label"):
+            self.archive_path_label.config(text=self._shorten_path(full_path))
+            self.archive_path_tooltip.set_text(full_path)
         for field, value in workspace.get("status_glance", []):
             if field in self.archive_status_glance_labels:
                 self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
@@ -1067,10 +1129,26 @@ class DeezerCuratorGUI(tk.Tk):
         if not target:
             self.archive_operation_result_var.set(f"Failure: {reason}")
             return
+        selected_key = self._archive_album_key(self.archive_selected_album)
+        artist_key = self.archive_selected_album.get("artist_key", "")
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
         self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
-        self.refresh_archive_browser()
+        self.refresh_archive_browser(restore_album_key=selected_key, restore_artist_key=artist_key)
         self.refresh_audio_dashboard()
+
+    def _archive_album_key(self, album: dict) -> str:
+        return str(album.get("archive_path") or album.get("album_id") or f"{album.get('artist', '')}|{album.get('title', '')}")
+
+    def _shorten_path(self, value: str, max_chars: int = 72) -> str:
+        text = str(value or "")
+        if len(text) <= max_chars:
+            return text
+        parts = Path(text).parts
+        if len(parts) >= 4:
+            shortened = ".../" + "/".join(parts[-3:])
+            if len(shortened) <= max_chars:
+                return shortened
+        return "..." + text[-(max_chars - 3):]
 
     def clear_library_albums(self):
         self.library_album_rows = []
@@ -1149,22 +1227,42 @@ class DeezerCuratorGUI(tk.Tk):
         path = thumbnail.get("path")
         if path:
             try:
-                image = self._fit_album_cover(tk.PhotoImage(file=path), label)
+                image = self._load_album_cover(path, label)
                 label.config(image=image, text="")
                 return image
-            except tk.TclError:
+            except (tk.TclError, OSError, subprocess.SubprocessError):
                 pass
         label.config(image="", text="No artwork" if status == "Missing" else "Artwork")
         return None
 
+    def _load_album_cover(self, path: str, label: tk.Label) -> tk.PhotoImage:
+        try:
+            return self._fit_album_cover(tk.PhotoImage(file=path), label)
+        except tk.TclError:
+            return self._load_converted_album_cover(path, label)
+
+    def _load_converted_album_cover(self, path: str, label: tk.Label) -> tk.PhotoImage:
+        max_size = self._album_cover_max_size(label)
+        result = subprocess.run(
+            ["convert", str(path), "-auto-orient", "-resize", f"{max_size}x{max_size}", "png:-"],
+            check=True,
+            capture_output=True,
+        )
+        data = base64.b64encode(result.stdout).decode("ascii")
+        return tk.PhotoImage(data=data)
+
     def _fit_album_cover(self, image: tk.PhotoImage, label: tk.Label, fallback_size: int = 320) -> tk.PhotoImage:
+        max_size = self._album_cover_max_size(label, fallback_size)
+        largest = max(image.width(), image.height())
+        factor = max(1, (largest + max_size - 1) // max_size)
+        return image.subsample(factor, factor) if factor > 1 else image
+
+    def _album_cover_max_size(self, label: tk.Label, fallback_size: int = 320) -> int:
         label.update_idletasks()
         max_size = min(label.winfo_width(), label.winfo_height())
         if max_size < 80:
             max_size = fallback_size
-        largest = max(image.width(), image.height())
-        factor = max(1, (largest + max_size - 1) // max_size)
-        return image.subsample(factor, factor) if factor > 1 else image
+        return max_size
 
     def _build_scrolled_text(self, parent) -> tk.Text:
         frame = ttk.Frame(parent)
