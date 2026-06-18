@@ -48,6 +48,12 @@ from audio_division.selection_state import (
     capture_archive_selection,
     selected_album_index,
 )
+from audio_division.processing_queue import (
+    load_processing_queue,
+    processing_rows,
+    queue_for_processing,
+    save_processing_queue,
+)
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
     OPPORTUNITY_CATEGORIES,
@@ -70,6 +76,7 @@ ARTISTS_DIR = DATA_DIR / "artists"
 SHIPPED_DIR = DATA_DIR / "shipped"
 AUDIO_DIVISION_SETTINGS_FILE = DATA_DIR / "audio_division_settings.json"
 OPERATION_HISTORY_FILE = DATA_DIR / "operation_history.json"
+PROCESSING_QUEUE_FILE = DATA_DIR / "processing_queue.json"
 META_FILE = DATA_DIR / "artist_meta.json"
 
 STREAMRIP_BIN = Path(
@@ -172,6 +179,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_artist_var = tk.StringVar()
         self.archive_album_var = tk.StringVar()
         self.archive_operation_result_var = tk.StringVar()
+        self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
+        self.processing_queue_rows: list[dict] = []
         self.opportunity_rows: list[dict] = []
         self.filtered_opportunity_rows: list[dict] = []
         self.opportunity_summary_labels: dict[str, ttk.Label] = {}
@@ -474,6 +483,24 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_album_tree.pack(fill="both", expand=True)
         self.archive_album_tree.bind("<<TreeviewSelect>>", self.on_archive_album_selected)
 
+        processing = ttk.LabelFrame(album_frame, text="Processing", padding=4)
+        processing.pack(fill="x", pady=(6, 0))
+        self.processing_queue_tree = ttk.Treeview(
+            processing,
+            columns=("album", "source", "state"),
+            show="headings",
+            height=5,
+            selectmode="browse",
+        )
+        for column, title, width in (
+            ("album", "Album", 210),
+            ("source", "Source", 80),
+            ("state", "Current State", 120),
+        ):
+            self.processing_queue_tree.heading(column, text=title)
+            self.processing_queue_tree.column(column, width=width, anchor="w")
+        self.processing_queue_tree.pack(fill="x", expand=False)
+
         detail = ttk.LabelFrame(panes, text="Album Workspace", padding=6)
         panes.add(detail, weight=4)
         self._build_archive_workspace(detail)
@@ -514,9 +541,10 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(operations, text="NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).grid(row=0, column=1, sticky="ew", pady=(0, 3))
         ttk.Button(operations, text="SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).grid(row=1, column=0, sticky="ew", padx=(0, 3))
         ttk.Button(operations, text="Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=1, column=1, sticky="ew")
+        ttk.Button(operations, text="Queue", command=self.queue_selected_archive_album_for_processing).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         operations.columnconfigure(0, weight=1)
         operations.columnconfigure(1, weight=1)
-        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         self.archive_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
         details = ttk.Frame(summary)
@@ -1006,6 +1034,7 @@ class DeezerCuratorGUI(tk.Tk):
         identity = load_json(DATA_DIR / "identity_registry.json")
         metadata = load_json(DATA_DIR / "metadata_cache.json")
         self.archive_albums = build_archive_albums(registry, identity, metadata)
+        self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
         self.apply_archive_filters(
             restore_album_key=restore_album_key,
             restore_artist_key=restore_artist_key,
@@ -1037,6 +1066,7 @@ class DeezerCuratorGUI(tk.Tk):
                 iid=f"artist:{row['artist_key']}",
                 text=f"{row['artist']} ({row['album_count']})",
             )
+        self.refresh_processing_queue_view()
         if restore_artist_key:
             artist_iid = f"artist:{restore_artist_key}"
             if self.archive_tree.exists(artist_iid):
@@ -1173,6 +1203,33 @@ class DeezerCuratorGUI(tk.Tk):
         if selection.active_tab:
             self.tabs.select(selection.active_tab)
         self.refresh_audio_dashboard()
+
+    def queue_selected_archive_album_for_processing(self):
+        if not self.archive_selected_album:
+            self.archive_operation_result_var.set("Failure: select an album first")
+            return
+        self.processing_queue = queue_for_processing(self.processing_queue, self.archive_selected_album, source="archive")
+        save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
+        self.refresh_processing_queue_view()
+        self.archive_operation_result_var.set("Queued for processing.")
+
+    def refresh_processing_queue_view(self):
+        if not hasattr(self, "processing_queue_tree"):
+            return
+        self.processing_queue_rows = processing_rows(self.filtered_archive_albums, self.processing_queue)
+        for item in self.processing_queue_tree.get_children():
+            self.processing_queue_tree.delete(item)
+        for index, row in enumerate(self.processing_queue_rows[:100]):
+            self.processing_queue_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(
+                    row.get("album", ""),
+                    row.get("source", ""),
+                    row.get("current_state", ""),
+                ),
+            )
 
     def _archive_album_key(self, album: dict) -> str:
         return archive_album_key(album)
