@@ -13,6 +13,14 @@ from audio_division.settings import (
     load_audio_division_settings,
     save_audio_division_settings,
 )
+from audio_division.layout_state import (
+    capture_pane_positions,
+    default_window_geometry,
+    deserialize_pane_positions,
+    restore_pane_positions,
+    serialize_pane_positions,
+    valid_window_geometry,
+)
 from audio_division.operation_runner import run_operation
 from audio_division.batch_operations import (
     available_batch_operations,
@@ -95,9 +103,6 @@ class DeezerCuratorGUI(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("STiGMA Deezer Curator — v0.3.1")
-        self.geometry("1400x700")
-
         self.main_mode = "artist"  # artist | inbox
         self.sort_mode = "alphabetical"
 
@@ -107,6 +112,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
+        self.layout_panes: dict[str, ttk.Panedwindow] = {}
         self.dashboard_value_labels: dict[str, ttk.Label] = {}
         self.action_detail = None
         self.operation_history_detail = None
@@ -145,7 +151,13 @@ class DeezerCuratorGUI(tk.Tk):
         self.hub_summary_labels: dict[str, ttk.Label] = {}
         self.hub_action_result_var = tk.StringVar(value="")
 
+        self.title("STiGMA Deezer Curator — v0.3.1")
+        self.minsize(1100, 650)
+        self.geometry(self._initial_window_geometry())
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
         self._build_layout()
+        self.after(150, self.restore_layout_state)
         self.refresh_artists()
         self.load_inbox()
         self.load_custom_queue()
@@ -285,6 +297,32 @@ class DeezerCuratorGUI(tk.Tk):
         self._build_hub_opportunities_tab(hub_tab)
         self._build_settings_tab(settings_tab)
 
+    def _initial_window_geometry(self) -> str:
+        saved = valid_window_geometry(self.audio_settings.get("ui", {}).get("window_geometry", ""))
+        if saved:
+            return saved
+        return default_window_geometry(self.winfo_screenwidth(), self.winfo_screenheight())
+
+    def restore_layout_state(self):
+        ui = self.audio_settings.get("ui", {})
+        for name, pane in self.layout_panes.items():
+            positions = deserialize_pane_positions(ui.get(f"{name}_panes", ""))
+            if positions:
+                restore_pane_positions(pane, positions)
+
+    def save_layout_state(self):
+        ui = self.audio_settings.setdefault("ui", {})
+        ui["window_geometry"] = self.geometry()
+        for name, pane in self.layout_panes.items():
+            positions = capture_pane_positions(pane)
+            if positions:
+                ui[f"{name}_panes"] = serialize_pane_positions(positions)
+        save_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE, self.audio_settings)
+
+    def on_close(self):
+        self.save_layout_state()
+        self.destroy()
+
     def _build_library_tab(self, parent):
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 10))
@@ -307,6 +345,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         browser = ttk.Panedwindow(parent, orient="horizontal")
         browser.pack(fill="both", expand=True)
+        self.layout_panes["library_main"] = browser
 
         artists_frame = ttk.LabelFrame(browser, text="Artists", padding=6)
         browser.add(artists_frame, weight=1)
@@ -342,7 +381,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_album_tree.bind("<<TreeviewSelect>>", self.on_library_album_selected)
 
         details_frame = ttk.LabelFrame(browser, text="Album Details", padding=6)
-        browser.add(details_frame, weight=2)
+        browser.add(details_frame, weight=4)
         self.library_detail_container = ttk.Frame(details_frame)
         self.library_detail_container.pack(fill="both", expand=True)
         self._build_library_detail_sections(self.library_detail_container)
@@ -374,6 +413,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         panes = ttk.Panedwindow(parent, orient="horizontal")
         panes.pack(fill="both", expand=True)
+        self.layout_panes["archive_main"] = panes
 
         tree_frame = ttk.LabelFrame(panes, text="Archive Tree", padding=4)
         panes.add(tree_frame, weight=1)
@@ -401,15 +441,22 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_album_tree.bind("<<TreeviewSelect>>", self.on_archive_album_selected)
 
         detail = ttk.LabelFrame(panes, text="Album Workspace", padding=6)
-        panes.add(detail, weight=3)
+        panes.add(detail, weight=4)
         self._build_archive_workspace(detail)
         self.refresh_archive_browser()
 
     def _build_archive_workspace(self, parent):
-        top = ttk.Frame(parent)
-        top.pack(fill="x", pady=(0, 8))
-        self.archive_thumbnail = tk.Label(top, text="No artwork", width=32, height=14, anchor="center", relief="sunken", bg="white")
-        self.archive_thumbnail.pack(side="left", padx=(0, 10))
+        workspace = ttk.Panedwindow(parent, orient="vertical")
+        workspace.pack(fill="both", expand=True)
+        self.layout_panes["archive_workspace"] = workspace
+
+        top = ttk.Frame(workspace)
+        workspace.add(top, weight=1)
+        cover_box = ttk.Frame(top, width=320, height=260)
+        cover_box.pack(side="left", fill="y", padx=(0, 10))
+        cover_box.pack_propagate(False)
+        self.archive_thumbnail = tk.Label(cover_box, text="No artwork", anchor="center", relief="sunken", bg="white")
+        self.archive_thumbnail.pack(fill="both", expand=True)
         header = ttk.Frame(top)
         header.pack(side="left", fill="both", expand=True)
         self.archive_artwork_status = ttk.Label(header, text="Artwork: Unknown", wraplength=480)
@@ -424,13 +471,15 @@ class DeezerCuratorGUI(tk.Tk):
             self.archive_status_glance_labels[field] = value
 
         self.archive_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
+        middle = ttk.Panedwindow(workspace, orient="horizontal")
+        workspace.add(middle, weight=1)
         for section_id, title, fields in (
             ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
             ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         ):
-            frame = ttk.LabelFrame(parent, text=title, padding=6)
-            frame.pack(fill="x", pady=(0, 8))
+            frame = ttk.LabelFrame(middle, text=title, padding=6)
+            middle.add(frame, weight=1)
             for row, field in enumerate(fields):
                 ttk.Label(frame, text=f"{field}:").grid(row=row, column=0, sticky="nw", padx=(0, 6), pady=1)
                 value = ttk.Label(frame, text="", wraplength=520)
@@ -438,21 +487,20 @@ class DeezerCuratorGUI(tk.Tk):
                 frame.columnconfigure(1, weight=1)
                 self.archive_presentation_labels[(section_id, field)] = value
 
-        evidence = ttk.Panedwindow(parent, orient="horizontal")
-        evidence.pack(fill="both", expand=True, pady=(0, 8))
+        evidence = ttk.Panedwindow(workspace, orient="horizontal")
+        workspace.add(evidence, weight=4)
+        self.layout_panes["archive_evidence"] = evidence
         track_frame = ttk.LabelFrame(evidence, text="Tracklist", padding=6)
         evidence.add(track_frame, weight=1)
-        self.archive_tracklist_text = tk.Text(track_frame, wrap="none", height=10)
-        self.archive_tracklist_text.pack(fill="both", expand=True)
+        self.archive_tracklist_text = self._build_scrolled_text(track_frame)
         self.archive_tracklist_text.config(state="disabled")
         nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
         evidence.add(nfo_frame, weight=1)
-        self.archive_nfo_text = tk.Text(nfo_frame, wrap="none", height=10)
-        self.archive_nfo_text.pack(fill="both", expand=True)
+        self.archive_nfo_text = self._build_scrolled_text(nfo_frame)
         self.archive_nfo_text.config(state="disabled")
 
         operations = ttk.LabelFrame(parent, text="Archive Operations", padding=6)
-        operations.pack(fill="x")
+        operations.pack(fill="x", pady=(8, 0))
         ttk.Button(operations, text="Validate Album", command=lambda: self.run_archive_album_operation("validate_album")).pack(side="left")
         ttk.Button(operations, text="Generate NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).pack(side="left", padx=(6, 0))
         ttk.Button(operations, text="Generate SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).pack(side="left", padx=(6, 0))
@@ -460,10 +508,17 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Label(operations, textvariable=self.archive_operation_result_var).pack(side="left", padx=(12, 0))
 
     def _build_library_detail_sections(self, parent):
-        top = ttk.Frame(parent)
-        top.pack(fill="x", pady=(0, 8))
-        self.library_thumbnail = tk.Label(top, text="No artwork", width=32, height=14, anchor="center", relief="sunken", bg="white")
-        self.library_thumbnail.pack(side="left", padx=(0, 10))
+        workspace = ttk.Panedwindow(parent, orient="vertical")
+        workspace.pack(fill="both", expand=True)
+        self.layout_panes["library_workspace"] = workspace
+
+        top = ttk.Frame(workspace)
+        workspace.add(top, weight=1)
+        cover_box = ttk.Frame(top, width=320, height=260)
+        cover_box.pack(side="left", fill="y", padx=(0, 10))
+        cover_box.pack_propagate(False)
+        self.library_thumbnail = tk.Label(cover_box, text="No artwork", anchor="center", relief="sunken", bg="white")
+        self.library_thumbnail.pack(fill="both", expand=True)
         album_header = ttk.Frame(top)
         album_header.pack(side="left", fill="both", expand=True)
         self.library_artwork_status = ttk.Label(album_header, text="Artwork: Unknown", wraplength=480)
@@ -478,13 +533,15 @@ class DeezerCuratorGUI(tk.Tk):
             value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=1)
             self.library_status_glance_labels[field] = value
 
+        middle = ttk.Panedwindow(workspace, orient="horizontal")
+        workspace.add(middle, weight=1)
         for section_id, title, fields in (
             ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
             ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         ):
-            frame = ttk.LabelFrame(parent, text=title, padding=6)
-            frame.pack(fill="x", pady=(0, 8))
+            frame = ttk.LabelFrame(middle, text=title, padding=6)
+            middle.add(frame, weight=1)
             for row, field in enumerate(fields):
                 ttk.Label(frame, text=f"{field}:").grid(row=row, column=0, sticky="nw", padx=(0, 6), pady=1)
                 value = ttk.Label(frame, text="", wraplength=420)
@@ -492,18 +549,17 @@ class DeezerCuratorGUI(tk.Tk):
                 frame.columnconfigure(1, weight=1)
                 self.library_presentation_labels[(section_id, field)] = value
 
-        evidence = ttk.Panedwindow(parent, orient="horizontal")
-        evidence.pack(fill="both", expand=True, pady=(0, 8))
+        evidence = ttk.Panedwindow(workspace, orient="horizontal")
+        workspace.add(evidence, weight=4)
+        self.layout_panes["library_evidence"] = evidence
         track_frame = ttk.LabelFrame(evidence, text="Tracklist", padding=6)
         evidence.add(track_frame, weight=1)
-        self.library_tracklist_text = tk.Text(track_frame, wrap="none", height=10)
-        self.library_tracklist_text.pack(fill="both", expand=True)
+        self.library_tracklist_text = self._build_scrolled_text(track_frame)
         self.library_tracklist_text.config(state="disabled")
 
         nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
         evidence.add(nfo_frame, weight=1)
-        self.library_nfo_text = tk.Text(nfo_frame, wrap="none", height=10)
-        self.library_nfo_text.pack(fill="both", expand=True)
+        self.library_nfo_text = self._build_scrolled_text(nfo_frame)
         self.library_nfo_text.config(state="disabled")
 
     def _build_artwork_tab(self, parent):
@@ -1091,6 +1147,20 @@ class DeezerCuratorGUI(tk.Tk):
         largest = max(image.width(), image.height())
         factor = max(1, (largest + max_size - 1) // max_size)
         return image.subsample(factor, factor) if factor > 1 else image
+
+    def _build_scrolled_text(self, parent) -> tk.Text:
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        text = tk.Text(frame, wrap="none")
+        yscroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        xscroll = ttk.Scrollbar(frame, orient="horizontal", command=text.xview)
+        text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        return text
 
     def _set_text_widget(self, widget: tk.Text, text: str):
         widget.config(state="normal")

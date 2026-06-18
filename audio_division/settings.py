@@ -29,6 +29,15 @@ DEFAULT_SETTINGS = {
         "flac_validator_path": "",
         "file_manager_path": "xdg-open",
     },
+    "ui": {
+        "window_geometry": "",
+        "archive_main_panes": "",
+        "archive_workspace_panes": "",
+        "archive_evidence_panes": "",
+        "library_main_panes": "",
+        "library_workspace_panes": "",
+        "library_evidence_panes": "",
+    },
 }
 
 
