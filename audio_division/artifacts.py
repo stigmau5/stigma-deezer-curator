@@ -9,6 +9,7 @@ from curator.atomic import atomic_write_text
 
 ARTIFACT_TYPES = ("nfo", "sfv", "playlist", "artwork", "validation_log")
 ARTWORK_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+PREFERRED_ARTWORK_FILENAMES = ("cover.jpg", "folder.jpg", "front.jpg", "cover.png", "folder.png")
 
 
 def detect_album_artifacts(album_path: Path) -> dict[str, Any]:
@@ -17,6 +18,7 @@ def detect_album_artifacts(album_path: Path) -> dict[str, Any]:
     sfv_files = [path for path in files if path.is_file() and path.suffix.lower() == ".sfv"]
     playlist_files = [path for path in files if path.is_file() and path.suffix.lower() in {".m3u", ".m3u8"}]
     artwork_files = [path for path in files if path.is_file() and path.suffix.lower() in ARTWORK_SUFFIXES]
+    artwork_file = select_artwork_file(album_path, artwork_files)
     validation_files = [path for path in files if path.is_file() and path.name == "STIGMA_VALIDATED.txt"]
     return {
         "folder": str(album_path),
@@ -25,6 +27,8 @@ def detect_album_artifacts(album_path: Path) -> dict[str, Any]:
         "sfv": bool(sfv_files),
         "playlist": bool(playlist_files),
         "artwork": bool(artwork_files),
+        "artwork_path": str(artwork_file) if artwork_file else "",
+        "artwork_name": artwork_file.name if artwork_file else "",
         "validation_log": bool(validation_files),
         "counts": {
             "nfo": len(nfo_files),
@@ -34,6 +38,19 @@ def detect_album_artifacts(album_path: Path) -> dict[str, Any]:
             "validation_log": len(validation_files),
         },
     }
+
+
+def select_artwork_file(album_path: Path, artwork_files: list[Path] | None = None) -> Path | None:
+    if not album_path.exists() or not album_path.is_dir():
+        return None
+    files = artwork_files
+    if files is None:
+        files = [path for path in album_path.iterdir() if path.is_file() and path.suffix.lower() in ARTWORK_SUFFIXES]
+    by_name = {path.name.lower(): path for path in files}
+    for preferred in PREFERRED_ARTWORK_FILENAMES:
+        if preferred in by_name:
+            return by_name[preferred]
+    return sorted(files, key=lambda path: path.name.lower())[0] if files else None
 
 
 def scan_archive_artifacts(album_paths: list[Path]) -> dict[str, Any]:

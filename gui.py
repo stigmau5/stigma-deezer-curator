@@ -1043,19 +1043,11 @@ class DeezerCuratorGUI(tk.Tk):
         )
 
     def _set_archive_thumbnail(self, thumbnail: dict):
-        status = thumbnail.get("status", "Missing")
-        display = thumbnail.get("display", "")
-        self.archive_artwork_status.config(text=f"Artwork: {status} - {display}")
-        self.archive_thumbnail_image = None
-        path = thumbnail.get("path")
-        if path:
-            try:
-                self.archive_thumbnail_image = self._fit_library_photo(tk.PhotoImage(file=path))
-                self.archive_thumbnail.config(image=self.archive_thumbnail_image, text="")
-                return
-            except tk.TclError:
-                pass
-        self.archive_thumbnail.config(image="", text="No artwork" if status == "Missing" else "Artwork")
+        self.archive_thumbnail_image = self._set_album_cover(
+            self.archive_thumbnail,
+            self.archive_artwork_status,
+            thumbnail,
+        )
 
     def run_archive_album_operation(self, operation_id: str):
         target, reason = album_archive_operation_target(self.archive_selected_album)
@@ -1131,21 +1123,32 @@ class DeezerCuratorGUI(tk.Tk):
         )
 
     def _set_library_thumbnail(self, thumbnail: dict):
+        self.library_thumbnail_image = self._set_album_cover(
+            self.library_thumbnail,
+            self.library_artwork_status,
+            thumbnail,
+        )
+
+    def _set_album_cover(self, label: tk.Label, status_label: ttk.Label, thumbnail: dict):
         status = thumbnail.get("status", "Missing")
         display = thumbnail.get("display", "")
-        self.library_artwork_status.config(text=f"Artwork: {status} - {display}")
-        self.library_thumbnail_image = None
+        status_label.config(text=f"Artwork: {status} - {display}")
         path = thumbnail.get("path")
         if path:
             try:
-                self.library_thumbnail_image = self._fit_library_photo(tk.PhotoImage(file=path))
-                self.library_thumbnail.config(image=self.library_thumbnail_image, text="")
-                return
+                image = self._fit_album_cover(tk.PhotoImage(file=path), label)
+                label.config(image=image, text="")
+                return image
             except tk.TclError:
                 pass
-        self.library_thumbnail.config(image="", text="No artwork" if status == "Missing" else "Artwork")
+        label.config(image="", text="No artwork" if status == "Missing" else "Artwork")
+        return None
 
-    def _fit_library_photo(self, image: tk.PhotoImage, max_size: int = 320) -> tk.PhotoImage:
+    def _fit_album_cover(self, image: tk.PhotoImage, label: tk.Label, fallback_size: int = 320) -> tk.PhotoImage:
+        label.update_idletasks()
+        max_size = min(label.winfo_width(), label.winfo_height())
+        if max_size < 80:
+            max_size = fallback_size
         largest = max(image.width(), image.height())
         factor = max(1, (largest + max_size - 1) // max_size)
         return image.subsample(factor, factor) if factor > 1 else image

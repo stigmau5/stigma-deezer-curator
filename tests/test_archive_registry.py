@@ -10,6 +10,7 @@ from audio_division.archive_registry import (
     render_archive_registry_report,
     render_artifact_coverage_report,
 )
+from audio_division.artifacts import detect_album_artifacts, select_artwork_file
 
 
 class ArchiveRegistryTests(unittest.TestCase):
@@ -46,8 +47,24 @@ class ArchiveRegistryTests(unittest.TestCase):
 
         self.assertEqual(entry["track_count"], 1)
         self.assertTrue(entry["artifacts"]["nfo"])
+        self.assertEqual(entry["artifacts"]["artwork_name"], "cover.jpg")
         self.assertTrue(entry["artifacts"]["validation_log"])
         self.assertEqual(entry["relative_path"], "Artist-Album-2026-FLAC-STiGMA")
+
+    def test_artwork_detection_prefers_cover_folder_front_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp)
+            (album / "z-random.png").write_text("art")
+            (album / "front.jpg").write_text("art")
+            (album / "folder.jpg").write_text("art")
+            (album / "cover.jpg").write_text("art")
+
+            selected = select_artwork_file(album)
+            artifacts = detect_album_artifacts(album)
+
+        self.assertEqual(selected.name, "cover.jpg")
+        self.assertTrue(artifacts["artwork"])
+        self.assertEqual(artifacts["artwork_name"], "cover.jpg")
 
     def test_registry_generation_and_reports(self):
         with tempfile.TemporaryDirectory() as tmp:

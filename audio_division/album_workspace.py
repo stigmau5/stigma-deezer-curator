@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.album_presentation import album_presentation, thumbnail_info
-from audio_division.artifacts import ARTWORK_SUFFIXES
+from audio_division.artifacts import select_artwork_file
 from audio_division.archive_registry import AUDIO_SUFFIXES
 
 PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
@@ -31,7 +31,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
 def cover_info(details: dict[str, Any], archive_path: Path | None = None) -> dict[str, Any]:
     info = thumbnail_info(details)
     if info.get("source") == "none" and archive_path:
-        artwork = first_file(archive_path, ARTWORK_SUFFIXES)
+        artwork = select_artwork_file(archive_path)
         if artwork:
             return {
                 "status": "Present",

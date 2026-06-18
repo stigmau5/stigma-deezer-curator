@@ -121,7 +121,7 @@ def project_archive_album(
             "has_playlist": artifacts.get("playlist", False),
             "has_artwork": artifacts.get("artwork", False) or bool(covers),
         },
-        "artwork": {"cover_identity": metadata_album.get("cover_identity", ""), "urls": covers, "local": artifacts.get("artwork", False)},
+        "artwork": {"cover_identity": metadata_album.get("cover_identity", ""), "urls": covers, "local": artifacts.get("artwork_path", "")},
     }
 
 

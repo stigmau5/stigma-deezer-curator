@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.album_presentation import thumbnail_info
-from audio_division.artifacts import ARTWORK_SUFFIXES
+from audio_division.artifacts import select_artwork_file
 from curator.atomic import atomic_write_text
 
 
@@ -154,10 +154,7 @@ def write_artwork_coverage_report(
 
 
 def first_artwork_path(album_path: Path) -> Path | None:
-    if not album_path.exists() or not album_path.is_dir():
-        return None
-    artwork = sorted(path for path in album_path.iterdir() if path.is_file() and path.suffix.lower() in ARTWORK_SUFFIXES)
-    return artwork[0] if artwork else None
+    return select_artwork_file(album_path)
 
 
 def split_archive_folder(folder_name: Any) -> tuple[str, str]:

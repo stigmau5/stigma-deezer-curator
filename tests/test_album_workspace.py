@@ -87,6 +87,16 @@ class AlbumWorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace["tracklist"]["source"], "filesystem")
         self.assertIn(("Readiness", "ARCHIVE_READY"), workspace["status_glance"])
 
+    def test_cover_info_prefers_named_album_artwork(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp)
+            (album / "z-random.jpg").write_text("art")
+            (album / "folder.jpg").write_text("art")
+            workspace = album_workspace(self.details(str(album)))
+
+        self.assertEqual(workspace["cover"]["source"], "local")
+        self.assertEqual(workspace["cover"]["display"], "folder.jpg")
+
     def test_parse_playlist_ignores_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
             playlist = Path(tmp) / "album.m3u"

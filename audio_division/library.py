@@ -262,7 +262,7 @@ def _album_record(
                 "artwork": {
                     "cover_identity": metadata_album.get("cover_identity"),
                     "urls": covers,
-                    "local": artifacts.get("artwork") if artifacts else None,
+                    "local": artifacts.get("artwork_path") if artifacts else None,
                 },
             }
         ),
@@ -278,7 +278,7 @@ def _album_record(
         "artwork": {
             "cover_identity": metadata_album.get("cover_identity"),
             "urls": covers,
-            "local": artifacts.get("artwork") if artifacts else None,
+            "local": artifacts.get("artwork_path") if artifacts else None,
         },
     }
 
