@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
         "reports_directory": "reports",
     },
     "tools": {
+        "audio_division_path": "",
         "nfo_generator_path": "",
         "sfv_generator_path": "",
         "flac_validator_path": "",

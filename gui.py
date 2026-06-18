@@ -54,6 +54,7 @@ from audio_division.processing_queue import (
     queue_for_processing,
     save_processing_queue,
 )
+from audio_division.integration import run_audio_division_process_album
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
     OPPORTUNITY_CATEGORIES,
@@ -542,9 +543,10 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(operations, text="SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).grid(row=1, column=0, sticky="ew", padx=(0, 3))
         ttk.Button(operations, text="Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=1, column=1, sticky="ew")
         ttk.Button(operations, text="Queue", command=self.queue_selected_archive_album_for_processing).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        ttk.Button(operations, text="Process Album", command=self.process_selected_archive_album).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         operations.columnconfigure(0, weight=1)
         operations.columnconfigure(1, weight=1)
-        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         self.archive_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
         details = ttk.Frame(summary)
@@ -939,6 +941,7 @@ class DeezerCuratorGUI(tk.Tk):
             ("validator", "validation_log_root", "Validation Log Root"),
             ("metadata", "metadata_cache_path", "Metadata Cache Path"),
             ("reports", "reports_directory", "Reports Directory"),
+            ("tools", "audio_division_path", "Audio Division Path"),
             ("tools", "nfo_generator_path", "NFO Generator Path"),
             ("tools", "sfv_generator_path", "SFV Generator Path"),
             ("tools", "flac_validator_path", "FLAC Validator Path"),
@@ -1212,6 +1215,29 @@ class DeezerCuratorGUI(tk.Tk):
         save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
         self.refresh_processing_queue_view()
         self.archive_operation_result_var.set("Queued for processing.")
+
+    def process_selected_archive_album(self):
+        target, reason = album_archive_operation_target(self.archive_selected_album)
+        if not target:
+            self.archive_operation_result_var.set(f"Failure: {reason}")
+            return
+        selection = capture_archive_selection(
+            self.archive_selected_album,
+            active_tab=self.tabs.select(),
+            album_yview=self.archive_album_tree.yview(),
+        )
+        self.processing_queue = queue_for_processing(self.processing_queue, self.archive_selected_album, source="archive")
+        save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
+        result = run_audio_division_process_album(target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
+        self.refresh_archive_browser(
+            restore_album_key=selection.album_key,
+            restore_artist_key=selection.artist_key,
+            restore_album_yview=selection.album_yview,
+        )
+        if selection.active_tab:
+            self.tabs.select(selection.active_tab)
+        self.refresh_audio_dashboard()
 
     def refresh_processing_queue_view(self):
         if not hasattr(self, "processing_queue_tree"):
