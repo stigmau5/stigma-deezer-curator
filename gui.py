@@ -8,7 +8,7 @@ import re
 import threading
 
 from curator.curate import run_curation
-from audio_division.dashboard import dashboard_summary
+from audio_division.dashboard import dashboard_summary, load_json
 from audio_division.settings import (
     load_audio_division_settings,
     save_audio_division_settings,
@@ -21,6 +21,7 @@ from audio_division.batch_operations import (
     write_batch_operation_report,
 )
 from audio_division.album_presentation import album_presentation
+from audio_division.artwork_browser import artwork_items, filter_artwork_items
 from audio_division.library import (
     album_archive_operation_target,
     album_details,
@@ -112,6 +113,11 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_operation_result_var = tk.StringVar()
         self.library_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
         self.library_thumbnail_image = None
+        self.artwork_rows: list[dict] = []
+        self.filtered_artwork_rows: list[dict] = []
+        self.artwork_artist_var = tk.StringVar()
+        self.artwork_album_var = tk.StringVar()
+        self.artwork_status_var = tk.StringVar(value="Select an album cover.")
         self.opportunity_rows: list[dict] = []
         self.filtered_opportunity_rows: list[dict] = []
         self.opportunity_summary_labels: dict[str, ttk.Label] = {}
@@ -145,6 +151,9 @@ class DeezerCuratorGUI(tk.Tk):
         library_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(library_tab, text="Library")
         self.library_tab = library_tab
+
+        artwork_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(artwork_tab, text="Artwork")
 
         opportunities_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(opportunities_tab, text="Archive Opportunities")
@@ -253,6 +262,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         self._build_audio_dashboard(audio_tab)
         self._build_library_tab(library_tab)
+        self._build_artwork_tab(artwork_tab)
         self._build_opportunities_tab(opportunities_tab)
         self._build_hub_opportunities_tab(hub_tab)
         self._build_settings_tab(settings_tab)
@@ -353,6 +363,39 @@ class DeezerCuratorGUI(tk.Tk):
                 value.grid(row=row, column=1, sticky="ew", pady=1)
                 frame.columnconfigure(1, weight=1)
                 self.library_presentation_labels[(section_id, field)] = value
+
+    def _build_artwork_tab(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_artwork_browser).pack(side="left")
+        ttk.Label(toolbar, text="Artist").pack(side="left", padx=(12, 4))
+        artist_filter = ttk.Entry(toolbar, textvariable=self.artwork_artist_var, width=24)
+        artist_filter.pack(side="left")
+        ttk.Label(toolbar, text="Album").pack(side="left", padx=(12, 4))
+        album_filter = ttk.Entry(toolbar, textvariable=self.artwork_album_var, width=24)
+        album_filter.pack(side="left")
+        ttk.Button(toolbar, text="Open Album", command=self.open_selected_artwork_album).pack(side="left", padx=(12, 0))
+        ttk.Button(toolbar, text="Open Folder", command=self.open_selected_artwork_folder).pack(side="left", padx=(6, 0))
+        artist_filter.bind("<KeyRelease>", lambda event: self.apply_artwork_filters())
+        album_filter.bind("<KeyRelease>", lambda event: self.apply_artwork_filters())
+
+        self.artwork_tree = ttk.Treeview(
+            parent,
+            columns=("cover", "artist", "album", "year", "readiness"),
+            show="headings",
+            selectmode="browse",
+        )
+        for column, title, width in (
+            ("cover", "Cover", 180),
+            ("artist", "Artist", 180),
+            ("album", "Album", 260),
+            ("year", "Year", 70),
+            ("readiness", "Readiness", 150),
+        ):
+            self.artwork_tree.heading(column, text=title)
+            self.artwork_tree.column(column, width=width, anchor="w")
+        self.artwork_tree.pack(fill="both", expand=True)
+        ttk.Label(parent, textvariable=self.artwork_status_var).pack(anchor="w", pady=(8, 0))
 
     def _build_opportunities_tab(self, parent):
         toolbar = ttk.Frame(parent)
@@ -698,6 +741,8 @@ class DeezerCuratorGUI(tk.Tk):
             self.refresh_opportunities()
         if hasattr(self, "hub_category_list"):
             self.refresh_hub_opportunities()
+        if hasattr(self, "artwork_tree"):
+            self.refresh_artwork_browser()
 
     def clear_library_albums(self):
         self.library_album_rows = []
@@ -762,6 +807,74 @@ class DeezerCuratorGUI(tk.Tk):
             except tk.TclError:
                 pass
         self.library_thumbnail.config(image="", text="No artwork" if status == "Missing" else "Artwork")
+
+    def refresh_artwork_browser(self):
+        if not hasattr(self, "artwork_tree"):
+            return
+        if not self.library_data:
+            self.refresh_library()
+            return
+        self.artwork_rows = artwork_items(self.library_data, load_json(DATA_DIR / "archive_registry.json"))
+        self.apply_artwork_filters()
+
+    def apply_artwork_filters(self):
+        self.filtered_artwork_rows = filter_artwork_items(
+            self.artwork_rows,
+            artist=self.artwork_artist_var.get(),
+            album=self.artwork_album_var.get(),
+        )
+        for item in self.artwork_tree.get_children():
+            self.artwork_tree.delete(item)
+        for idx, row in enumerate(self.filtered_artwork_rows):
+            self.artwork_tree.insert(
+                "",
+                tk.END,
+                iid=str(idx),
+                values=(
+                    row.get("thumbnail_display", ""),
+                    row.get("artist", ""),
+                    row.get("album", ""),
+                    row.get("year", ""),
+                    row.get("readiness", ""),
+                ),
+            )
+        self.artwork_status_var.set(f"{len(self.filtered_artwork_rows)} artwork item(s)")
+
+    def selected_artwork_row(self) -> dict:
+        selection = self.artwork_tree.selection()
+        if not selection:
+            return {}
+        index = int(selection[0])
+        if index >= len(self.filtered_artwork_rows):
+            return {}
+        return self.filtered_artwork_rows[index]
+
+    def open_selected_artwork_album(self):
+        row = self.selected_artwork_row()
+        if not row:
+            self.artwork_status_var.set("Select an artwork item first.")
+            return
+        details = album_details(self.library_data, row.get("album_id", ""))
+        if not details:
+            self.artwork_status_var.set("Selected album is not available in Library data.")
+            return
+        self.tabs.select(self.library_tab)
+        self.library_selected_album = details
+        self.set_library_detail(details)
+        self.artwork_status_var.set("Opened album details.")
+
+    def open_selected_artwork_folder(self):
+        row = self.selected_artwork_row()
+        if not row:
+            self.artwork_status_var.set("Select an artwork item first.")
+            return
+        details = album_details(self.library_data, row.get("album_id", ""))
+        target, reason = album_archive_operation_target(details)
+        if not target:
+            self.artwork_status_var.set(reason)
+            return
+        result = run_operation("open_album_folder", target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.artwork_status_var.set(f"{result['result'].title()}: {result['message']}")
 
     def run_library_album_operation(self, operation_id: str):
         target, reason = album_archive_operation_target(self.library_selected_album)

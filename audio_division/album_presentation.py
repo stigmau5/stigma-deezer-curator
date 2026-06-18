@@ -60,7 +60,7 @@ def thumbnail_info(details: dict[str, Any]) -> dict[str, Any]:
     artwork = details.get("artwork", {}) if isinstance(details.get("artwork"), dict) else {}
     local = artwork.get("local")
     urls = artwork.get("urls", {}) if isinstance(artwork.get("urls"), dict) else {}
-    local_path = Path(local) if local else None
+    local_path = Path(local) if isinstance(local, (str, Path)) and local else None
     if local_path and local_path.exists() and local_path.is_file():
         return {
             "status": "Present",
