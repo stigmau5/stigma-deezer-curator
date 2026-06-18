@@ -5,6 +5,7 @@ from pathlib import Path
 from audio_division.album_workspace import album_workspace
 from audio_division.physical_archive import (
     albums_for_archive_artist,
+    archive_identity_for_row,
     archive_readiness,
     archive_tree,
     build_archive_albums,
@@ -95,6 +96,92 @@ class PhysicalArchiveTests(unittest.TestCase):
         self.assertEqual(workspace["cover"]["source"], "local")
         self.assertEqual(workspace["nfo"]["status"], "Present")
         self.assertEqual(workspace["tracklist"]["source"], "playlist")
+
+    def test_archive_identity_matches_release_folder_with_source_tags(self):
+        row = self.registry_row(
+            "/archive/N/nas/Albums/nas-the_lost_tapes-2002-WEB-FLAC-STiGMA",
+            "N/nas/Albums/nas-the_lost_tapes-2002-WEB-FLAC-STiGMA",
+        )
+        row["name"] = "nas-the_lost_tapes-2002-WEB-FLAC-STiGMA"
+        identity = {
+            "releases": [
+                {
+                    "archive_identity": {"folder": "Nas-The Lost Tapes-2002-FLAC-STiGMA"},
+                    "discovery_identity": {"deezer_album_id": "78471", "artist": "Nas", "title": "The Lost Tapes"},
+                    "identity_confidence": "HIGH",
+                }
+            ]
+        }
+
+        release = archive_identity_for_row(row, identity)
+
+        self.assertEqual(release["discovery_identity"]["deezer_album_id"], "78471")
+
+    def test_archive_metadata_bridge_populates_album_workspace_fields(self):
+        row = self.registry_row(
+            "/archive/N/nas/Albums/nas-the_lost_tapes-2002-WEB-FLAC-STiGMA",
+            "N/nas/Albums/nas-the_lost_tapes-2002-WEB-FLAC-STiGMA",
+        )
+        row["name"] = "nas-the_lost_tapes-2002-WEB-FLAC-STiGMA"
+        identity = {
+            "releases": [
+                {
+                    "archive_identity": {"folder": "Nas-The Lost Tapes-2002-FLAC-STiGMA"},
+                    "discovery_identity": {"deezer_album_id": "78471", "artist": "Nas", "title": "The Lost Tapes"},
+                    "identity_confidence": "HIGH",
+                }
+            ]
+        }
+        metadata = {
+            "albums": {
+                "78471": {
+                    "title": "The Lost Tapes",
+                    "release_date": "2002-09-23",
+                    "record_type": "album",
+                    "label": "Columbia",
+                    "genres": [{"name": "Hip Hop"}],
+                    "track_count": 11,
+                    "contributors": [{"name": "Nas", "role": "Main"}],
+                    "covers": {"medium": "https://example.test/cover.jpg"},
+                }
+            },
+            "artists": {},
+            "tracks": {},
+        }
+
+        album = build_archive_albums({"albums": [row]}, identity, metadata)[0]
+        workspace = album_workspace(album, metadata)
+        metadata_section = dict(workspace["presentation"]["sections"]["metadata"])
+
+        self.assertEqual(album["album_id"], "78471")
+        self.assertEqual(album["identity_confidence"], "HIGH")
+        self.assertEqual(album["metadata_status"], "CACHED")
+        self.assertEqual(metadata_section["Label"], "Columbia")
+        self.assertEqual(metadata_section["Genre"], "Hip Hop")
+        self.assertEqual(metadata_section["Release date"], "2002-09-23")
+        self.assertEqual(metadata_section["Contributors"], "Nas (Main)")
+
+    def test_archive_metadata_bridge_reports_uncached_metadata(self):
+        row = self.registry_row(
+            "/archive/N/nas/Albums/nas-the_lost_tapes-2002-WEB-FLAC-STiGMA",
+            "N/nas/Albums/nas-the_lost_tapes-2002-WEB-FLAC-STiGMA",
+        )
+        row["name"] = "nas-the_lost_tapes-2002-WEB-FLAC-STiGMA"
+        identity = {
+            "releases": [
+                {
+                    "archive_identity": {"folder": "Nas-The Lost Tapes-2002-FLAC-STiGMA"},
+                    "discovery_identity": {"deezer_album_id": "78471", "artist": "Nas", "title": "The Lost Tapes"},
+                    "identity_confidence": "HIGH",
+                }
+            ]
+        }
+
+        album = build_archive_albums({"albums": [row]}, identity, {"albums": {}, "artists": {}, "tracks": {}})[0]
+
+        self.assertEqual(album["album_id"], "78471")
+        self.assertEqual(album["metadata_status"], "AVAILABLE_NOT_CACHED")
+        self.assertEqual(album["album_status"]["items"]["metadata"], "Missing")
 
 
 if __name__ == "__main__":

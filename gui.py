@@ -475,7 +475,7 @@ class DeezerCuratorGUI(tk.Tk):
         workspace.add(middle, weight=1)
         for section_id, title, fields in (
             ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
-            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
+            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Contributors", "Metadata status", "Cached fields", "Missing fields")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         ):
             frame = ttk.LabelFrame(middle, text=title, padding=6)
@@ -537,7 +537,7 @@ class DeezerCuratorGUI(tk.Tk):
         workspace.add(middle, weight=1)
         for section_id, title, fields in (
             ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
-            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
+            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Contributors", "Metadata status", "Cached fields", "Missing fields")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         ):
             frame = ttk.LabelFrame(middle, text=title, padding=6)
@@ -946,7 +946,9 @@ class DeezerCuratorGUI(tk.Tk):
         if not hasattr(self, "archive_tree"):
             return
         registry = load_json(DATA_DIR / "archive_registry.json")
-        self.archive_albums = build_archive_albums(registry)
+        identity = load_json(DATA_DIR / "identity_registry.json")
+        metadata = load_json(DATA_DIR / "metadata_cache.json")
+        self.archive_albums = build_archive_albums(registry, identity, metadata)
         self.apply_archive_filters()
 
     def apply_archive_filters(self):

@@ -41,6 +41,7 @@ def album_presentation(details: dict[str, Any]) -> dict[str, Any]:
             ("Genre", ", ".join(details.get("genres", []))),
             ("Release date", details.get("release_date") or ""),
             ("Track count", details.get("track_count") or ""),
+            ("Contributors", _contributors(details.get("contributors", []))),
             ("Metadata status", details.get("metadata_status") or "UNKNOWN"),
             ("Cached fields", _field_list(cached_fields, True)),
             ("Missing fields", ", ".join(missing_fields)),
@@ -94,6 +95,12 @@ def _documentation_status(status_items: dict[str, Any]) -> str:
 
 def _field_list(fields: dict[str, bool], expected: bool) -> str:
     return ", ".join(field for field, present in fields.items() if present is expected)
+
+
+def _contributors(contributors: Any) -> str:
+    if not isinstance(contributors, list):
+        return ""
+    return ", ".join(str(item) for item in contributors if item)
 
 
 def _artwork_source(details: dict[str, Any]) -> str:
