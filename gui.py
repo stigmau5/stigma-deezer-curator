@@ -22,6 +22,12 @@ from audio_division.batch_operations import (
 )
 from audio_division.album_workspace import album_workspace
 from audio_division.artwork_browser import artwork_items, filter_artwork_items
+from audio_division.physical_archive import (
+    albums_for_archive_artist,
+    archive_tree,
+    build_archive_albums,
+    filter_archive_albums,
+)
 from audio_division.library import (
     album_archive_operation_target,
     album_details,
@@ -118,6 +124,14 @@ class DeezerCuratorGUI(tk.Tk):
         self.artwork_artist_var = tk.StringVar()
         self.artwork_album_var = tk.StringVar()
         self.artwork_status_var = tk.StringVar(value="Select an album cover.")
+        self.archive_albums: list[dict] = []
+        self.filtered_archive_albums: list[dict] = []
+        self.archive_artist_rows: list[dict] = []
+        self.archive_album_rows: list[dict] = []
+        self.archive_selected_album: dict = {}
+        self.archive_artist_var = tk.StringVar()
+        self.archive_album_var = tk.StringVar()
+        self.archive_operation_result_var = tk.StringVar()
         self.opportunity_rows: list[dict] = []
         self.filtered_opportunity_rows: list[dict] = []
         self.opportunity_summary_labels: dict[str, ttk.Label] = {}
@@ -147,6 +161,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         audio_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(audio_tab, text="Audio Division")
+
+        archive_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(archive_tab, text="Archive")
 
         library_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(library_tab, text="Library")
@@ -261,6 +278,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.status.pack(side="right")
 
         self._build_audio_dashboard(audio_tab)
+        self._build_archive_tab(archive_tab)
         self._build_library_tab(library_tab)
         self._build_artwork_tab(artwork_tab)
         self._build_opportunities_tab(opportunities_tab)
@@ -340,6 +358,106 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Label(operations, textvariable=self.library_operation_result_var).pack(anchor="w", pady=(6, 0))
 
         self.refresh_library()
+
+    def _build_archive_tab(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 8))
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_archive_browser).pack(side="left")
+        ttk.Label(toolbar, text="Artist").pack(side="left", padx=(12, 4))
+        artist_filter = ttk.Entry(toolbar, textvariable=self.archive_artist_var, width=24)
+        artist_filter.pack(side="left")
+        ttk.Label(toolbar, text="Album").pack(side="left", padx=(12, 4))
+        album_filter = ttk.Entry(toolbar, textvariable=self.archive_album_var, width=24)
+        album_filter.pack(side="left")
+        artist_filter.bind("<KeyRelease>", lambda event: self.apply_archive_filters())
+        album_filter.bind("<KeyRelease>", lambda event: self.apply_archive_filters())
+
+        panes = ttk.Panedwindow(parent, orient="horizontal")
+        panes.pack(fill="both", expand=True)
+
+        tree_frame = ttk.LabelFrame(panes, text="Archive Tree", padding=4)
+        panes.add(tree_frame, weight=1)
+        self.archive_tree = ttk.Treeview(tree_frame, show="tree", selectmode="browse")
+        self.archive_tree.pack(fill="both", expand=True)
+        self.archive_tree.bind("<<TreeviewSelect>>", self.on_archive_artist_selected)
+
+        album_frame = ttk.LabelFrame(panes, text="Albums", padding=4)
+        panes.add(album_frame, weight=2)
+        self.archive_album_tree = ttk.Treeview(
+            album_frame,
+            columns=("album", "year", "validation", "readiness"),
+            show="headings",
+            selectmode="browse",
+        )
+        for column, title, width in (
+            ("album", "Album", 280),
+            ("year", "Year", 70),
+            ("validation", "Validation", 100),
+            ("readiness", "Readiness", 140),
+        ):
+            self.archive_album_tree.heading(column, text=title)
+            self.archive_album_tree.column(column, width=width, anchor="w")
+        self.archive_album_tree.pack(fill="both", expand=True)
+        self.archive_album_tree.bind("<<TreeviewSelect>>", self.on_archive_album_selected)
+
+        detail = ttk.LabelFrame(panes, text="Album Workspace", padding=6)
+        panes.add(detail, weight=3)
+        self._build_archive_workspace(detail)
+        self.refresh_archive_browser()
+
+    def _build_archive_workspace(self, parent):
+        top = ttk.Frame(parent)
+        top.pack(fill="x", pady=(0, 8))
+        self.archive_thumbnail = tk.Label(top, text="No artwork", width=32, height=14, anchor="center", relief="sunken", bg="white")
+        self.archive_thumbnail.pack(side="left", padx=(0, 10))
+        header = ttk.Frame(top)
+        header.pack(side="left", fill="both", expand=True)
+        self.archive_artwork_status = ttk.Label(header, text="Artwork: Unknown", wraplength=480)
+        self.archive_artwork_status.pack(anchor="w", pady=(0, 8))
+        status = ttk.LabelFrame(header, text="Archive Status", padding=6)
+        status.pack(fill="x")
+        self.archive_status_glance_labels: dict[str, ttk.Label] = {}
+        for idx, field in enumerate(("Validation", "NFO", "SFV", "Playlist", "Artwork", "Readiness", "Health")):
+            ttk.Label(status, text=f"{field}:").grid(row=idx // 2, column=(idx % 2) * 2, sticky="w", padx=(0, 6), pady=1)
+            value = ttk.Label(status, text="Unknown")
+            value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=1)
+            self.archive_status_glance_labels[field] = value
+
+        self.archive_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
+        for section_id, title, fields in (
+            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
+            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
+            ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
+        ):
+            frame = ttk.LabelFrame(parent, text=title, padding=6)
+            frame.pack(fill="x", pady=(0, 8))
+            for row, field in enumerate(fields):
+                ttk.Label(frame, text=f"{field}:").grid(row=row, column=0, sticky="nw", padx=(0, 6), pady=1)
+                value = ttk.Label(frame, text="", wraplength=520)
+                value.grid(row=row, column=1, sticky="ew", pady=1)
+                frame.columnconfigure(1, weight=1)
+                self.archive_presentation_labels[(section_id, field)] = value
+
+        evidence = ttk.Panedwindow(parent, orient="horizontal")
+        evidence.pack(fill="both", expand=True, pady=(0, 8))
+        track_frame = ttk.LabelFrame(evidence, text="Tracklist", padding=6)
+        evidence.add(track_frame, weight=1)
+        self.archive_tracklist_text = tk.Text(track_frame, wrap="none", height=10)
+        self.archive_tracklist_text.pack(fill="both", expand=True)
+        self.archive_tracklist_text.config(state="disabled")
+        nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
+        evidence.add(nfo_frame, weight=1)
+        self.archive_nfo_text = tk.Text(nfo_frame, wrap="none", height=10)
+        self.archive_nfo_text.pack(fill="both", expand=True)
+        self.archive_nfo_text.config(state="disabled")
+
+        operations = ttk.LabelFrame(parent, text="Archive Operations", padding=6)
+        operations.pack(fill="x")
+        ttk.Button(operations, text="Validate Album", command=lambda: self.run_archive_album_operation("validate_album")).pack(side="left")
+        ttk.Button(operations, text="Generate NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).pack(side="left", padx=(6, 0))
+        ttk.Button(operations, text="Generate SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).pack(side="left", padx=(6, 0))
+        ttk.Button(operations, text="Open Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).pack(side="left", padx=(6, 0))
+        ttk.Label(operations, textvariable=self.archive_operation_result_var).pack(side="left", padx=(12, 0))
 
     def _build_library_detail_sections(self, parent):
         top = ttk.Frame(parent)
@@ -767,6 +885,129 @@ class DeezerCuratorGUI(tk.Tk):
             self.refresh_hub_opportunities()
         if hasattr(self, "artwork_tree"):
             self.refresh_artwork_browser()
+
+    def refresh_archive_browser(self):
+        if not hasattr(self, "archive_tree"):
+            return
+        registry = load_json(DATA_DIR / "archive_registry.json")
+        self.archive_albums = build_archive_albums(registry)
+        self.apply_archive_filters()
+
+    def apply_archive_filters(self):
+        self.filtered_archive_albums = filter_archive_albums(
+            self.archive_albums,
+            artist=self.archive_artist_var.get(),
+            album=self.archive_album_var.get(),
+        )
+        self.archive_artist_rows = archive_tree(self.filtered_archive_albums)
+        for item in self.archive_tree.get_children():
+            self.archive_tree.delete(item)
+        letters: dict[str, str] = {}
+        for row in self.archive_artist_rows:
+            letter = row.get("letter", "#")
+            if letter not in letters:
+                letters[letter] = self.archive_tree.insert("", tk.END, text=letter, open=True)
+            self.archive_tree.insert(
+                letters[letter],
+                tk.END,
+                iid=f"artist:{row['artist_key']}",
+                text=f"{row['artist']} ({row['album_count']})",
+            )
+        self.clear_archive_albums()
+
+    def clear_archive_albums(self):
+        self.archive_album_rows = []
+        self.archive_selected_album = {}
+        for item in self.archive_album_tree.get_children():
+            self.archive_album_tree.delete(item)
+        self.set_archive_detail({})
+
+    def on_archive_artist_selected(self, event=None):
+        selection = self.archive_tree.selection()
+        if not selection:
+            return
+        item = selection[0]
+        if not str(item).startswith("artist:"):
+            return
+        artist_key = str(item).split(":", 1)[1]
+        self.archive_album_rows = albums_for_archive_artist(self.filtered_archive_albums, artist_key)
+        for existing in self.archive_album_tree.get_children():
+            self.archive_album_tree.delete(existing)
+        for row in self.archive_album_rows:
+            readiness = row.get("archive_readiness", {})
+            status = row.get("album_status", {}).get("items", {})
+            self.archive_album_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    row.get("title", ""),
+                    row.get("year", ""),
+                    status.get("validation", "Unknown"),
+                    readiness.get("state", "UNKNOWN"),
+                ),
+            )
+        self.set_archive_detail({})
+
+    def on_archive_album_selected(self, event=None):
+        selection = self.archive_album_tree.selection()
+        if not selection:
+            return
+        index = self.archive_album_tree.index(selection[0])
+        if index >= len(self.archive_album_rows):
+            return
+        self.archive_selected_album = self.archive_album_rows[index]
+        self.set_archive_detail(self.archive_selected_album)
+
+    def set_archive_detail(self, details: dict):
+        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"))
+        presentation = workspace.get("presentation", {})
+        sections = presentation.get("sections", {})
+        for (section_id, field), label in self.archive_presentation_labels.items():
+            value = ""
+            for item_field, item_value in sections.get(section_id, []):
+                if item_field == field:
+                    value = item_value
+                    break
+            label.config(text=str(value or ""))
+        for field, value in workspace.get("status_glance", []):
+            if field in self.archive_status_glance_labels:
+                self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
+        self._set_archive_thumbnail(workspace.get("cover", {}))
+        tracklist = workspace.get("tracklist", {})
+        self._set_text_widget(
+            self.archive_tracklist_text,
+            f"Source: {tracklist.get('source', 'missing')}\n\n" + "\n".join(tracklist.get("tracks", [])),
+        )
+        nfo = workspace.get("nfo", {})
+        self._set_text_widget(
+            self.archive_nfo_text,
+            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}\n\n{nfo.get('content', '')}",
+        )
+
+    def _set_archive_thumbnail(self, thumbnail: dict):
+        status = thumbnail.get("status", "Missing")
+        display = thumbnail.get("display", "")
+        self.archive_artwork_status.config(text=f"Artwork: {status} - {display}")
+        self.archive_thumbnail_image = None
+        path = thumbnail.get("path")
+        if path:
+            try:
+                self.archive_thumbnail_image = self._fit_library_photo(tk.PhotoImage(file=path))
+                self.archive_thumbnail.config(image=self.archive_thumbnail_image, text="")
+                return
+            except tk.TclError:
+                pass
+        self.archive_thumbnail.config(image="", text="No artwork" if status == "Missing" else "Artwork")
+
+    def run_archive_album_operation(self, operation_id: str):
+        target, reason = album_archive_operation_target(self.archive_selected_album)
+        if not target:
+            self.archive_operation_result_var.set(f"Failure: {reason}")
+            return
+        result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
+        self.refresh_archive_browser()
+        self.refresh_audio_dashboard()
 
     def clear_library_albums(self):
         self.library_album_rows = []
