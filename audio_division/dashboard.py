@@ -32,6 +32,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
     sources = load_dashboard_sources(data_dir)
     readiness = {}
     hub_opportunities = {}
+    album_truth = {}
     try:
         from audio_division.library import library_from_data_dir
         from audio_division.opportunities import derive_hub_opportunities, hub_opportunity_summary
@@ -41,10 +42,12 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
         archive_root = settings.get("archive_paths", {}).get("main_archive_root", "")
         library = library_from_data_dir(data_dir, Path(archive_root) if archive_root else None)
         readiness = library.get("archive_readiness_summary", {})
+        album_truth = library.get("summary", {}).get("album_truth", {})
         hub_opportunities = hub_opportunity_summary(derive_hub_opportunities(library))
     except Exception:
         readiness = {}
         hub_opportunities = {}
+        album_truth = {}
     return compute_dashboard_summary(
         sources["lifecycle"],
         sources["identity"],
@@ -52,6 +55,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
         sources["operation_history"],
         readiness,
         hub_opportunities,
+        album_truth,
     )
 
 
@@ -62,6 +66,7 @@ def compute_dashboard_summary(
     operation_history: dict[str, Any] | None = None,
     readiness_summary: dict[str, Any] | None = None,
     hub_opportunity_summary_data: dict[str, Any] | None = None,
+    album_truth_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lifecycle_summary = lifecycle.get("summary", {})
     state_counts = lifecycle_summary.get("state_evidence_counts", {})
@@ -79,9 +84,13 @@ def compute_dashboard_summary(
     identity_counts = identity_summary.get("confidence_counts", {})
     validation_evidence = lifecycle.get("validation_evidence_summary", {})
     validated = state_counts.get("VALIDATED", 0)
-    validation_coverage = _ratio(validated, total_albums)
+    truth_validation = (album_truth_summary or {}).get("counts", {}).get("validation", {})
+    truth_validated = truth_validation.get("Present")
+    dashboard_validated = truth_validated if truth_validated is not None else validated
+    validation_evidence_count = dashboard_validated if truth_validated is not None else validation_evidence.get("albums_with_evidence", validated)
+    validation_coverage = _ratio(dashboard_validated, total_albums)
 
-    archive_strength = _archive_strength_score(total_albums, identity_counts.get("HIGH", 0), validated, metadata_coverage)
+    archive_strength = _archive_strength_score(total_albums, identity_counts.get("HIGH", 0), dashboard_validated, metadata_coverage)
     actions = generate_archive_actions(lifecycle, identity, metadata)
     actions_summary = action_summary(actions)
     operations_summary = operation_summary(actions)
@@ -122,7 +131,7 @@ def compute_dashboard_summary(
         },
         "validation": {
             "coverage_percent": validation_coverage,
-            "evidence_count": validation_evidence.get("albums_with_evidence", validated),
+            "evidence_count": validation_evidence_count,
         },
         "archive_health": {
             "shipped_not_validated": gaps.get("shipped_not_validated", 0),

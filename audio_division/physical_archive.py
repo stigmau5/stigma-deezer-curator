@@ -6,6 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from audio_division.album_truth import album_truth
 from audio_division.metadata_status import album_metadata_status
 
 
@@ -74,8 +75,6 @@ def project_archive_album(
     artifacts = row.get("artifacts", {})
     artist = archive_artist(row)
     title = archive_title(row, artist)
-    status = archive_album_status(artifacts)
-    readiness = archive_readiness(status)
     identity_release = identity_release or {}
     metadata = metadata or {}
     discovery = identity_release.get("discovery_identity", {})
@@ -85,8 +84,14 @@ def project_archive_album(
     contributors = contributor_names(metadata_album.get("contributors", []))
     covers = metadata_album.get("covers", {}) if isinstance(metadata_album.get("covers"), dict) else {}
     genres = [item.get("name") for item in metadata_album.get("genres", []) if isinstance(item, dict) and item.get("name")]
-    status["items"]["metadata"] = metadata_item_status(metadata_detail["state"])
-    status["health_percent"] = archive_health_percent(status["items"])
+    truth = album_truth(
+        archive_path=row.get("archive_path"),
+        registry_artifacts=artifacts,
+        metadata_state=metadata_detail["state"],
+        metadata_album=metadata_album,
+    )
+    status = truth.to_album_status()
+    readiness = archive_readiness(status)
     return {
         "album_id": album_id,
         "artist_key": artist_key(artist),
@@ -102,7 +107,7 @@ def project_archive_album(
         "duration": metadata_album.get("duration") or "",
         "lifecycle_state": "ARCHIVED",
         "identity_confidence": identity_release.get("identity_confidence", "UNKNOWN"),
-        "validation_status": "validated" if artifacts.get("validation_log") else "not_validated",
+        "validation_status": "validated" if truth.validation.present else "not_validated",
         "metadata_status": metadata_detail["state"],
         "metadata_detail": metadata_detail,
         "archive_folder": row.get("name", ""),
@@ -114,12 +119,12 @@ def project_archive_album(
         "archive_readiness": readiness,
         "archive_strength_signals": {
             "has_identity": bool(album_id),
-            "has_validation": artifacts.get("validation_log", False),
+            "has_validation": truth.validation.present,
             "has_metadata": bool(metadata_album),
-            "has_nfo": artifacts.get("nfo", False),
-            "has_sfv": artifacts.get("sfv", False),
-            "has_playlist": artifacts.get("playlist", False),
-            "has_artwork": artifacts.get("artwork", False) or bool(covers),
+            "has_nfo": truth.nfo.present,
+            "has_sfv": truth.sfv.present,
+            "has_playlist": truth.playlist.present,
+            "has_artwork": truth.artwork.present,
         },
         "artwork": {"cover_identity": metadata_album.get("cover_identity", ""), "urls": covers, "local": artifacts.get("artwork_path", "")},
     }
@@ -156,34 +161,6 @@ def filter_archive_albums(
             continue
         out.append(row)
     return out
-
-
-def archive_album_status(artifacts: dict[str, Any]) -> dict[str, Any]:
-    items = {
-        "validation": "Present" if artifacts.get("validation_log") else "Missing",
-        "nfo": "Present" if artifacts.get("nfo") else "Missing",
-        "sfv": "Present" if artifacts.get("sfv") else "Missing",
-        "playlist": "Present" if artifacts.get("playlist") else "Missing",
-        "artwork": "Present" if artifacts.get("artwork") else "Missing",
-        "metadata": "Unknown",
-    }
-    known = [value for value in items.values() if value != "Unknown"]
-    present = sum(1 for value in known if value == "Present")
-    return {"items": items, "health_percent": round((present / len(known)) * 100) if known else 0}
-
-
-def archive_health_percent(items: dict[str, Any]) -> int:
-    known = [value for value in items.values() if value != "Unknown"]
-    present = sum(1 for value in known if value == "Present")
-    return round((present / len(known)) * 100) if known else 0
-
-
-def metadata_item_status(metadata_state: str) -> str:
-    if metadata_state == "CACHED":
-        return "Present"
-    if metadata_state in {"AVAILABLE_NOT_CACHED", "MISSING"}:
-        return "Missing"
-    return "Unknown"
 
 
 def contributor_names(contributors: Any) -> list[str]:
