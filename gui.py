@@ -20,6 +20,7 @@ from audio_division.batch_operations import (
     run_batch_operation,
     write_batch_operation_report,
 )
+from audio_division.album_presentation import album_presentation
 from audio_division.library import (
     album_archive_operation_target,
     album_details,
@@ -109,6 +110,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_summary_labels: dict[str, ttk.Label] = {}
         self.library_selected_album: dict = {}
         self.library_operation_result_var = tk.StringVar()
+        self.library_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
+        self.library_thumbnail_image = None
         self.opportunity_rows: list[dict] = []
         self.filtered_opportunity_rows: list[dict] = []
         self.opportunity_summary_labels: dict[str, ttk.Label] = {}
@@ -312,9 +315,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         details_frame = ttk.LabelFrame(browser, text="Album Details", padding=6)
         browser.add(details_frame, weight=2)
-        self.library_detail_text = tk.Text(details_frame, wrap="word", height=20)
-        self.library_detail_text.pack(fill="both", expand=True)
-        self.library_detail_text.config(state="disabled")
+        self.library_detail_container = ttk.Frame(details_frame)
+        self.library_detail_container.pack(fill="both", expand=True)
+        self._build_library_detail_sections(self.library_detail_container)
 
         operations = ttk.LabelFrame(details_frame, text="Album Operations", padding=6)
         operations.pack(fill="x", pady=(8, 0))
@@ -327,6 +330,29 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Label(operations, textvariable=self.library_operation_result_var).pack(anchor="w", pady=(6, 0))
 
         self.refresh_library()
+
+    def _build_library_detail_sections(self, parent):
+        top = ttk.Frame(parent)
+        top.pack(fill="x", pady=(0, 8))
+        self.library_thumbnail = ttk.Label(top, text="No artwork", width=18, anchor="center")
+        self.library_thumbnail.pack(side="left", padx=(0, 10))
+        self.library_artwork_status = ttk.Label(top, text="Artwork: Unknown", wraplength=360)
+        self.library_artwork_status.pack(side="left", fill="x", expand=True)
+
+        for section_id, title, fields in (
+            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
+            ("archive_status", "Archive Status", ("Validation", "Documentation", "Readiness", "Health", "Reason")),
+            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
+            ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
+        ):
+            frame = ttk.LabelFrame(parent, text=title, padding=6)
+            frame.pack(fill="x", pady=(0, 8))
+            for row, field in enumerate(fields):
+                ttk.Label(frame, text=f"{field}:").grid(row=row, column=0, sticky="nw", padx=(0, 6), pady=1)
+                value = ttk.Label(frame, text="", wraplength=420)
+                value.grid(row=row, column=1, sticky="ew", pady=1)
+                frame.columnconfigure(1, weight=1)
+                self.library_presentation_labels[(section_id, field)] = value
 
     def _build_opportunities_tab(self, parent):
         toolbar = ttk.Frame(parent)
@@ -711,60 +737,31 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_library_detail(self.library_selected_album)
 
     def set_library_detail(self, details: dict):
-        artwork = details.get("artwork", {}) if details else {}
-        signals = details.get("archive_strength_signals", {}) if details else {}
-        status = details.get("album_status", {}) if details else {}
-        status_items = status.get("items", {})
-        counts = details.get("artifacts", {}).get("counts", {}) if details else {}
-        lines = []
-        if details:
-            urls = artwork.get("urls", {}) if isinstance(artwork.get("urls"), dict) else {}
-            readiness = details.get("archive_readiness", {})
-            metadata_detail = details.get("metadata_detail", {})
-            cached_fields = metadata_detail.get("cached_fields", {})
-            missing_fields = metadata_detail.get("missing_fields", [])
-            lines = [
-                details.get("title", ""),
-                f"Artist: {details.get('artist', '')}",
-                f"Archive Folder: {details.get('archive_folder', '')}",
-                f"Archive Path: {details.get('archive_path', '')}",
-                f"Archive Path Confidence: {details.get('archive_path_confidence', 'UNKNOWN')}",
-                f"Year: {details.get('year', '')}",
-                f"Release Date: {details.get('release_date', '')}",
-                f"Label: {details.get('label', '')}",
-                f"Genres: {', '.join(details.get('genres', []))}",
-                f"Track Count: {details.get('track_count', '')}",
-                f"Duration: {details.get('duration', '')}",
-                f"Lifecycle State: {details.get('lifecycle_state', '')}",
-                f"Identity Confidence: {details.get('identity_confidence', '')}",
-                f"Validation Status: {details.get('validation_status', '')}",
-                f"Metadata Status: {details.get('metadata_status', '')}",
-                f"Metadata Coverage: {sum(1 for value in cached_fields.values() if value)}/{len(cached_fields) or 5}",
-                f"Cached Metadata Fields: {', '.join(field for field, present in cached_fields.items() if present)}",
-                f"Missing Metadata Fields: {', '.join(missing_fields)}",
-                f"Archive Strength Signals: {', '.join(k for k, v in signals.items() if v)}",
-                f"Artwork URL: {artwork.get('url') or urls.get('medium') or urls.get('big') or urls.get('xl') or ''}",
-                f"Artwork Identity: {artwork.get('md5_image') or artwork.get('cover_identity') or ''}",
-                "",
-                "Album Status:",
-                f"Validation: {status_items.get('validation', 'Unknown')}",
-                f"NFO: {status_items.get('nfo', 'Unknown')} ({counts.get('nfo', 0)})",
-                f"SFV: {status_items.get('sfv', 'Unknown')} ({counts.get('sfv', 0)})",
-                f"Playlist: {status_items.get('playlist', 'Unknown')} ({counts.get('playlist', 0)})",
-                f"Artwork: {status_items.get('artwork', 'Unknown')} ({counts.get('artwork', 0)})",
-                f"Metadata: {status_items.get('metadata', 'Unknown')}",
-                f"Album Health: {status.get('health_percent', 0)}%",
-                "",
-                "Archive Readiness:",
-                f"State: {readiness.get('state', 'UNKNOWN')}",
-                f"Reason: {readiness.get('reason', '')}",
-                f"Confidence: {readiness.get('confidence', '')}",
-                f"Explanation: {', '.join(readiness.get('explanation', []))}",
-            ]
-        self.library_detail_text.config(state="normal")
-        self.library_detail_text.delete("1.0", tk.END)
-        self.library_detail_text.insert(tk.END, "\n".join(lines) or "Select an album.")
-        self.library_detail_text.config(state="disabled")
+        presentation = album_presentation(details)
+        sections = presentation.get("sections", {})
+        for (section_id, field), label in self.library_presentation_labels.items():
+            value = ""
+            for item_field, item_value in sections.get(section_id, []):
+                if item_field == field:
+                    value = item_value
+                    break
+            label.config(text=str(value or ""))
+        self._set_library_thumbnail(presentation.get("thumbnail", {}))
+
+    def _set_library_thumbnail(self, thumbnail: dict):
+        status = thumbnail.get("status", "Missing")
+        display = thumbnail.get("display", "")
+        self.library_artwork_status.config(text=f"Artwork: {status} - {display}")
+        self.library_thumbnail_image = None
+        path = thumbnail.get("path")
+        if path:
+            try:
+                self.library_thumbnail_image = tk.PhotoImage(file=path)
+                self.library_thumbnail.config(image=self.library_thumbnail_image, text="")
+                return
+            except tk.TclError:
+                pass
+        self.library_thumbnail.config(image="", text="No artwork" if status == "Missing" else "Artwork")
 
     def run_library_album_operation(self, operation_id: str):
         target, reason = album_archive_operation_target(self.library_selected_album)
