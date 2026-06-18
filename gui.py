@@ -20,7 +20,7 @@ from audio_division.batch_operations import (
     run_batch_operation,
     write_batch_operation_report,
 )
-from audio_division.album_presentation import album_presentation
+from audio_division.album_workspace import album_workspace
 from audio_division.artwork_browser import artwork_items, filter_artwork_items
 from audio_division.library import (
     album_archive_operation_target,
@@ -344,14 +344,24 @@ class DeezerCuratorGUI(tk.Tk):
     def _build_library_detail_sections(self, parent):
         top = ttk.Frame(parent)
         top.pack(fill="x", pady=(0, 8))
-        self.library_thumbnail = ttk.Label(top, text="No artwork", width=18, anchor="center")
+        self.library_thumbnail = tk.Label(top, text="No artwork", width=32, height=14, anchor="center", relief="sunken", bg="white")
         self.library_thumbnail.pack(side="left", padx=(0, 10))
-        self.library_artwork_status = ttk.Label(top, text="Artwork: Unknown", wraplength=360)
-        self.library_artwork_status.pack(side="left", fill="x", expand=True)
+        album_header = ttk.Frame(top)
+        album_header.pack(side="left", fill="both", expand=True)
+        self.library_artwork_status = ttk.Label(album_header, text="Artwork: Unknown", wraplength=480)
+        self.library_artwork_status.pack(anchor="w", pady=(0, 8))
+
+        status = ttk.LabelFrame(album_header, text="Archive Status", padding=6)
+        status.pack(fill="x")
+        self.library_status_glance_labels: dict[str, ttk.Label] = {}
+        for idx, field in enumerate(("Validation", "NFO", "SFV", "Playlist", "Artwork", "Readiness", "Health")):
+            ttk.Label(status, text=f"{field}:").grid(row=idx // 2, column=(idx % 2) * 2, sticky="w", padx=(0, 6), pady=1)
+            value = ttk.Label(status, text="Unknown")
+            value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=1)
+            self.library_status_glance_labels[field] = value
 
         for section_id, title, fields in (
             ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
-            ("archive_status", "Archive Status", ("Validation", "Documentation", "Readiness", "Health", "Reason")),
             ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Metadata status", "Cached fields", "Missing fields")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         ):
@@ -363,6 +373,20 @@ class DeezerCuratorGUI(tk.Tk):
                 value.grid(row=row, column=1, sticky="ew", pady=1)
                 frame.columnconfigure(1, weight=1)
                 self.library_presentation_labels[(section_id, field)] = value
+
+        evidence = ttk.Panedwindow(parent, orient="horizontal")
+        evidence.pack(fill="both", expand=True, pady=(0, 8))
+        track_frame = ttk.LabelFrame(evidence, text="Tracklist", padding=6)
+        evidence.add(track_frame, weight=1)
+        self.library_tracklist_text = tk.Text(track_frame, wrap="none", height=10)
+        self.library_tracklist_text.pack(fill="both", expand=True)
+        self.library_tracklist_text.config(state="disabled")
+
+        nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
+        evidence.add(nfo_frame, weight=1)
+        self.library_nfo_text = tk.Text(nfo_frame, wrap="none", height=10)
+        self.library_nfo_text.pack(fill="both", expand=True)
+        self.library_nfo_text.config(state="disabled")
 
     def _build_artwork_tab(self, parent):
         toolbar = ttk.Frame(parent)
@@ -782,7 +806,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_library_detail(self.library_selected_album)
 
     def set_library_detail(self, details: dict):
-        presentation = album_presentation(details)
+        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"))
+        presentation = workspace.get("presentation", {})
         sections = presentation.get("sections", {})
         for (section_id, field), label in self.library_presentation_labels.items():
             value = ""
@@ -791,7 +816,20 @@ class DeezerCuratorGUI(tk.Tk):
                     value = item_value
                     break
             label.config(text=str(value or ""))
-        self._set_library_thumbnail(presentation.get("thumbnail", {}))
+        for field, value in workspace.get("status_glance", []):
+            if field in self.library_status_glance_labels:
+                self.library_status_glance_labels[field].config(text=str(value or "Unknown"))
+        self._set_library_thumbnail(workspace.get("cover", {}))
+        tracklist = workspace.get("tracklist", {})
+        self._set_text_widget(
+            self.library_tracklist_text,
+            f"Source: {tracklist.get('source', 'missing')}\n\n" + "\n".join(tracklist.get("tracks", [])),
+        )
+        nfo = workspace.get("nfo", {})
+        self._set_text_widget(
+            self.library_nfo_text,
+            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}\n\n{nfo.get('content', '')}",
+        )
 
     def _set_library_thumbnail(self, thumbnail: dict):
         status = thumbnail.get("status", "Missing")
@@ -801,12 +839,23 @@ class DeezerCuratorGUI(tk.Tk):
         path = thumbnail.get("path")
         if path:
             try:
-                self.library_thumbnail_image = tk.PhotoImage(file=path)
+                self.library_thumbnail_image = self._fit_library_photo(tk.PhotoImage(file=path))
                 self.library_thumbnail.config(image=self.library_thumbnail_image, text="")
                 return
             except tk.TclError:
                 pass
         self.library_thumbnail.config(image="", text="No artwork" if status == "Missing" else "Artwork")
+
+    def _fit_library_photo(self, image: tk.PhotoImage, max_size: int = 320) -> tk.PhotoImage:
+        largest = max(image.width(), image.height())
+        factor = max(1, (largest + max_size - 1) // max_size)
+        return image.subsample(factor, factor) if factor > 1 else image
+
+    def _set_text_widget(self, widget: tk.Text, text: str):
+        widget.config(state="normal")
+        widget.delete("1.0", tk.END)
+        widget.insert(tk.END, text)
+        widget.config(state="disabled")
 
     def refresh_artwork_browser(self):
         if not hasattr(self, "artwork_tree"):
