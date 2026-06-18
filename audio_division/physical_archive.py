@@ -85,10 +85,13 @@ def project_archive_album(
     covers = metadata_album.get("covers", {}) if isinstance(metadata_album.get("covers"), dict) else {}
     genres = [item.get("name") for item in metadata_album.get("genres", []) if isinstance(item, dict) and item.get("name")]
     truth = album_truth(
+        artist=artist,
+        album=title,
         archive_path=row.get("archive_path"),
         registry_artifacts=artifacts,
         metadata_state=metadata_detail["state"],
         metadata_album=metadata_album,
+        identity_confidence=identity_release.get("identity_confidence", "UNKNOWN"),
     )
     status = truth.to_album_status()
     readiness = archive_readiness(status)
@@ -116,6 +119,8 @@ def project_archive_album(
         "archive_path_reason": "archive_registry",
         "artifacts": artifacts,
         "album_status": status,
+        "album_truth": truth.to_dict(),
+        "processing_state": truth.processing_state,
         "archive_readiness": readiness,
         "archive_strength_signals": {
             "has_identity": bool(album_id),

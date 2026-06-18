@@ -227,6 +227,8 @@ def _album_record(
     states = lifecycle_row.get("states", {})
     covers = metadata_album.get("covers", {}) if isinstance(metadata_album.get("covers"), dict) else {}
     truth = album_truth(
+        artist=artist,
+        album=title,
         archive_path=archive_path,
         registry_artifacts=artifacts,
         validator_evidence={
@@ -235,6 +237,7 @@ def _album_record(
         },
         metadata_state=metadata_detail["state"],
         metadata_album=metadata_album,
+        identity_confidence=identity.get("identity_confidence", "UNKNOWN"),
     )
     status = truth.to_album_status()
     validation_status = "validated" if truth.validation.present else "not_validated"
@@ -262,6 +265,8 @@ def _album_record(
         "archive_path_reason": path_resolution["archive_path_reason"],
         "artifacts": artifacts,
         "album_status": status,
+        "album_truth": truth.to_dict(),
+        "processing_state": truth.processing_state,
         "archive_strength_signals": {
             "has_identity": identity.get("identity_confidence") == "HIGH",
             "has_validation": truth.validation.present,
