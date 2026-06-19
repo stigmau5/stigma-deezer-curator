@@ -57,11 +57,11 @@ from audio_division.processing_queue import (
     save_processing_queue,
 )
 from audio_division.integration import run_audio_division_process_album
-from audio_division.campaigns import (
-    CAMPAIGN_OPERATIONS,
-    campaign_albums,
-    campaign_summaries,
-    selected_campaign_targets,
+from audio_division.maintenance import (
+    maintenance_action_target,
+    maintenance_albums,
+    maintenance_counts,
+    maintenance_summaries,
 )
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
@@ -190,9 +190,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_operation_result_var = tk.StringVar()
         self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
         self.processing_queue_rows: list[dict] = []
-        self.campaign_rows: list[dict] = []
-        self.campaign_album_rows: list[dict] = []
-        self.selected_campaign_id = ""
+        self.maintenance_rows: list[dict] = []
+        self.maintenance_album_rows: list[dict] = []
+        self.selected_maintenance_id = ""
+        self.maintenance_summary_labels: dict[str, ttk.Label] = {}
         self.opportunity_rows: list[dict] = []
         self.filtered_opportunity_rows: list[dict] = []
         self.opportunity_summary_labels: dict[str, ttk.Label] = {}
@@ -515,44 +516,61 @@ class DeezerCuratorGUI(tk.Tk):
             self.processing_queue_tree.column(column, width=width, anchor="w")
         self.processing_queue_tree.pack(fill="x", expand=False)
 
-        campaigns = ttk.LabelFrame(album_frame, text="Campaigns", padding=4)
-        campaigns.pack(fill="both", expand=True, pady=(6, 0))
-        campaign_panes = ttk.Panedwindow(campaigns, orient="vertical")
-        campaign_panes.pack(fill="both", expand=True)
-        self.campaign_tree = ttk.Treeview(
-            campaign_panes,
-            columns=("campaign", "count"),
+        maintenance = ttk.LabelFrame(album_frame, text="Maintenance Center", padding=4)
+        maintenance.pack(fill="both", expand=True, pady=(6, 0))
+        summary = ttk.Frame(maintenance)
+        summary.pack(fill="x", pady=(0, 4))
+        for key, title in (
+            ("albums", "Albums"),
+            ("artists", "Artists"),
+            ("warnings", "Warnings"),
+            ("validation_coverage", "Validation Coverage"),
+            ("documentation_coverage", "Documentation Coverage"),
+        ):
+            ttk.Label(summary, text=f"{title}:").pack(side="left", padx=(0, 3))
+            label = ttk.Label(summary, text="0")
+            label.pack(side="left", padx=(0, 10))
+            self.maintenance_summary_labels[key] = label
+
+        maintenance_panes = ttk.Panedwindow(maintenance, orient="vertical")
+        maintenance_panes.pack(fill="both", expand=True)
+        self.maintenance_tree = ttk.Treeview(
+            maintenance_panes,
+            columns=("category", "count"),
             show="headings",
             height=5,
             selectmode="browse",
         )
-        for column, title, width in (("campaign", "Campaign Name", 220), ("count", "Album Count", 90)):
-            self.campaign_tree.heading(column, text=title)
-            self.campaign_tree.column(column, width=width, anchor="w")
-        campaign_panes.add(self.campaign_tree, weight=1)
-        self.campaign_tree.bind("<<TreeviewSelect>>", self.on_campaign_selected)
+        for column, title, width in (("category", "Maintenance Area", 220), ("count", "Album Count", 90)):
+            self.maintenance_tree.heading(column, text=title)
+            self.maintenance_tree.column(column, width=width, anchor="w")
+        maintenance_panes.add(self.maintenance_tree, weight=1)
+        self.maintenance_tree.bind("<<TreeviewSelect>>", self.on_maintenance_selected)
 
-        self.campaign_album_tree = ttk.Treeview(
-            campaign_panes,
-            columns=("artist", "album", "state"),
+        self.maintenance_album_tree = ttk.Treeview(
+            maintenance_panes,
+            columns=("artist", "album", "priority", "reason"),
             show="headings",
             height=6,
-            selectmode="extended",
+            selectmode="browse",
         )
         for column, title, width in (
             ("artist", "Artist", 140),
             ("album", "Album", 220),
-            ("state", "State", 120),
+            ("priority", "Priority", 80),
+            ("reason", "Reason", 260),
         ):
-            self.campaign_album_tree.heading(column, text=title)
-            self.campaign_album_tree.column(column, width=width, anchor="w")
-        campaign_panes.add(self.campaign_album_tree, weight=2)
+            self.maintenance_album_tree.heading(column, text=title)
+            self.maintenance_album_tree.column(column, width=width, anchor="w")
+        maintenance_panes.add(self.maintenance_album_tree, weight=2)
+        self.maintenance_album_tree.bind("<Double-1>", lambda event: self.open_selected_maintenance_album())
 
-        campaign_actions = ttk.Frame(campaigns)
-        campaign_actions.pack(fill="x", pady=(4, 0))
-        ttk.Button(campaign_actions, text="Validate Selected", command=lambda: self.run_campaign_operation("validate_album")).pack(side="left")
-        ttk.Button(campaign_actions, text="Generate NFO Selected", command=lambda: self.run_campaign_operation("generate_nfo")).pack(side="left", padx=(4, 0))
-        ttk.Button(campaign_actions, text="Generate SFV Selected", command=lambda: self.run_campaign_operation("generate_sfv")).pack(side="left", padx=(4, 0))
+        maintenance_actions = ttk.Frame(maintenance)
+        maintenance_actions.pack(fill="x", pady=(4, 0))
+        ttk.Button(maintenance_actions, text="Open Album", command=self.open_selected_maintenance_album).pack(side="left")
+        ttk.Button(maintenance_actions, text="Validate Album", command=lambda: self.run_maintenance_operation("validate_album")).pack(side="left", padx=(4, 0))
+        ttk.Button(maintenance_actions, text="Generate Documentation", command=lambda: self.run_maintenance_operation("generate_documentation")).pack(side="left", padx=(4, 0))
+        ttk.Button(maintenance_actions, text="Open Folder", command=lambda: self.run_maintenance_operation("open_album_folder")).pack(side="left", padx=(4, 0))
 
         detail = ttk.LabelFrame(panes, text="Album Workspace", padding=6)
         panes.add(detail, weight=4)
@@ -1149,7 +1167,7 @@ class DeezerCuratorGUI(tk.Tk):
                 text=f"{row['artist']} ({row['album_count']})",
             )
         self.refresh_processing_queue_view()
-        self.refresh_campaigns_view()
+        self.refresh_maintenance_view()
         if restore_artist_key:
             artist_iid = f"artist:{restore_artist_key}"
             if self.archive_tree.exists(artist_iid):
@@ -1346,17 +1364,23 @@ class DeezerCuratorGUI(tk.Tk):
                 ),
             )
 
-    def refresh_campaigns_view(self):
-        if not hasattr(self, "campaign_tree"):
+    def refresh_maintenance_view(self):
+        if not hasattr(self, "maintenance_tree"):
             return
-        previous = self.selected_campaign_id
-        self.campaign_rows = campaign_summaries(self.filtered_archive_albums)
-        for item in self.campaign_tree.get_children():
-            self.campaign_tree.delete(item)
+        previous = self.selected_maintenance_id
+        counts = maintenance_counts(self.filtered_archive_albums)
+        for key, label in self.maintenance_summary_labels.items():
+            value = counts.get(key, 0)
+            if key.endswith("_coverage"):
+                value = f"{value}%"
+            label.config(text=str(value))
+        self.maintenance_rows = maintenance_summaries(self.filtered_archive_albums)
+        for item in self.maintenance_tree.get_children():
+            self.maintenance_tree.delete(item)
         selected_iid = ""
-        for index, row in enumerate(self.campaign_rows):
+        for index, row in enumerate(self.maintenance_rows):
             iid = str(index)
-            self.campaign_tree.insert(
+            self.maintenance_tree.insert(
                 "",
                 tk.END,
                 iid=iid,
@@ -1365,65 +1389,90 @@ class DeezerCuratorGUI(tk.Tk):
             if row.get("id") == previous:
                 selected_iid = iid
         if selected_iid:
-            self.campaign_tree.selection_set(selected_iid)
-            self.campaign_tree.see(selected_iid)
-            self.render_campaign_albums(previous)
+            self.maintenance_tree.selection_set(selected_iid)
+            self.maintenance_tree.see(selected_iid)
+            self.render_maintenance_albums(previous)
         else:
-            self.selected_campaign_id = ""
-            self.render_campaign_albums("")
+            self.selected_maintenance_id = ""
+            self.render_maintenance_albums("")
 
-    def on_campaign_selected(self, event=None):
-        selection = self.campaign_tree.selection()
+    def on_maintenance_selected(self, event=None):
+        selection = self.maintenance_tree.selection()
         if not selection:
             return
         index = int(selection[0])
-        if index >= len(self.campaign_rows):
+        if index >= len(self.maintenance_rows):
             return
-        self.selected_campaign_id = self.campaign_rows[index].get("id", "")
-        self.render_campaign_albums(self.selected_campaign_id)
+        self.selected_maintenance_id = self.maintenance_rows[index].get("id", "")
+        self.render_maintenance_albums(self.selected_maintenance_id)
 
-    def render_campaign_albums(self, campaign_id: str):
-        if not hasattr(self, "campaign_album_tree"):
+    def render_maintenance_albums(self, category_id: str):
+        if not hasattr(self, "maintenance_album_tree"):
             return
-        self.campaign_album_rows = campaign_albums(self.filtered_archive_albums, campaign_id) if campaign_id else []
-        for item in self.campaign_album_tree.get_children():
-            self.campaign_album_tree.delete(item)
-        for index, row in enumerate(self.campaign_album_rows):
-            state = row.get("album_truth", {}).get("readiness") or row.get("archive_readiness", {}).get("state", "")
-            self.campaign_album_tree.insert(
+        self.maintenance_album_rows = maintenance_albums(self.filtered_archive_albums, category_id) if category_id else []
+        for item in self.maintenance_album_tree.get_children():
+            self.maintenance_album_tree.delete(item)
+        for index, row in enumerate(self.maintenance_album_rows):
+            self.maintenance_album_tree.insert(
                 "",
                 tk.END,
                 iid=str(index),
-                values=(row.get("artist", ""), row.get("title", ""), state),
+                values=(
+                    row.get("artist", ""),
+                    row.get("title", ""),
+                    row.get("maintenance_priority", ""),
+                    row.get("maintenance_reason", ""),
+                ),
             )
 
-    def selected_campaign_albums(self) -> list[dict]:
-        selection = self.campaign_album_tree.selection() if hasattr(self, "campaign_album_tree") else []
+    def selected_maintenance_album(self) -> dict:
+        selection = self.maintenance_album_tree.selection() if hasattr(self, "maintenance_album_tree") else []
         if not selection:
-            return list(self.campaign_album_rows)
-        albums = []
-        for item in selection:
-            index = int(item)
-            if index < len(self.campaign_album_rows):
-                albums.append(self.campaign_album_rows[index])
-        return albums
+            return {}
+        index = int(selection[0])
+        if index >= len(self.maintenance_album_rows):
+            return {}
+        return self.maintenance_album_rows[index]
 
-    def run_campaign_operation(self, operation_id: str):
-        campaign_operation = CAMPAIGN_OPERATIONS.get(self.selected_campaign_id)
-        if campaign_operation and campaign_operation != operation_id:
-            self.archive_operation_result_var.set("Failure: selected operation does not match campaign.")
+    def open_selected_maintenance_album(self):
+        album = self.selected_maintenance_album()
+        if not album:
+            self.archive_operation_result_var.set("Failure: no maintenance album selected.")
             return
-        albums = self.selected_campaign_albums()
-        if not albums:
-            self.archive_operation_result_var.set("Failure: no campaign albums selected.")
+        artist_iid = f"artist:{album.get('artist_key', '')}"
+        if self.archive_tree.exists(artist_iid):
+            self.archive_tree.selection_set(artist_iid)
+            self.archive_tree.see(artist_iid)
+            self._load_archive_artist_albums(album.get("artist_key", ""), self._archive_album_key(album), None)
+        self.archive_selected_album = album
+        self.set_archive_detail(album)
+        self.archive_operation_result_var.set("Album opened in workspace.")
+
+    def run_maintenance_operation(self, operation_id: str):
+        album = self.selected_maintenance_album()
+        if not album:
+            self.archive_operation_result_var.set("Failure: no maintenance album selected.")
             return
-        targets = selected_campaign_targets(operation_id, albums)
-        summary = run_batch_operation(operation_id, targets, self.audio_settings, OPERATION_HISTORY_FILE)
-        write_batch_operation_report(summary, BASE_DIR / "reports")
-        self.archive_operation_result_var.set(
-            f"Campaign {operation_id}: {summary['successes']} succeeded, {summary['failures']} failed, {summary.get('skipped', 0)} skipped."
+        resolved_operation, target, reason = maintenance_action_target(operation_id, album)
+        if not target:
+            self.archive_operation_result_var.set(f"Failure: {reason}")
+            return
+        selection = capture_archive_selection(
+            album,
+            active_tab=self.tabs.select(),
+            album_yview=self.archive_album_tree.yview(),
         )
-        self.refresh_archive_browser()
+        result = run_operation(resolved_operation, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.archive_operation_result_var.set(
+            f"{resolved_operation}: {result['result'].title()} - {result['message']}"
+        )
+        self.refresh_archive_browser(
+            restore_album_key=selection.album_key,
+            restore_artist_key=selection.artist_key,
+            restore_album_yview=selection.album_yview,
+        )
+        if selection.active_tab:
+            self.tabs.select(selection.active_tab)
         self.refresh_audio_dashboard()
 
     def _archive_album_key(self, album: dict) -> str:
