@@ -236,6 +236,8 @@ def render_archive_reconciliation_report(report: dict[str, Any]) -> str:
     lines.extend(render_album_table("Registry Entries Not Album Roots", report.get("albums_added", [])))
     lines.extend(render_changed_table(report.get("albums_changed", [])))
     lines.extend(render_disc_table(report.get("disc_folder_album_rows", [])))
+    while lines and lines[-1] == "":
+        lines.pop()
     return "\n".join(lines) + "\n"
 
 

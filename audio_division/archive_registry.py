@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -10,13 +11,15 @@ from audio_division.artifacts import ARTIFACT_TYPES, detect_album_artifacts
 from curator.atomic import atomic_write_text
 
 AUDIO_SUFFIXES = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aiff"}
+ALBUM_CATEGORIES = {"Albums", "EPs", "Singles", "Live"}
+DISC_FOLDER_PATTERN = re.compile(r"^(cd|disc)[ _-]?\d+$", re.IGNORECASE)
 REGISTRY_SCHEMA = 1
 
 
 def discover_album_folders(archive_root: Path) -> list[Path]:
     if not archive_root.exists() or not archive_root.is_dir():
         return []
-    return sorted(path for path in archive_root.rglob("*") if path.is_dir() and _looks_like_album_folder(path))
+    return sorted(path for path in archive_root.rglob("*") if path.is_dir() and is_album_root(path, archive_root))
 
 
 def build_archive_registry(archive_root: Path) -> dict[str, Any]:
@@ -45,7 +48,10 @@ def album_entry(album_path: Path, archive_root: Path) -> dict[str, Any]:
 def count_audio_tracks(album_path: Path) -> int:
     if not album_path.exists() or not album_path.is_dir():
         return 0
-    return sum(1 for path in album_path.iterdir() if path.is_file() and path.suffix.lower() in AUDIO_SUFFIXES)
+    total = count_direct_audio_tracks(album_path)
+    for folder in disc_folders(album_path):
+        total += count_direct_audio_tracks(folder)
+    return total
 
 
 def archive_registry_summary(albums: list[dict[str, Any]]) -> dict[str, Any]:
@@ -115,12 +121,58 @@ def write_archive_registry(registry: dict[str, Any], data_dir: Path, reports_dir
     atomic_write_text(reports_dir / "archive_artifact_coverage_report.md", render_artifact_coverage_report(registry))
 
 
-def _looks_like_album_folder(path: Path) -> bool:
+def is_album_root(path: Path, archive_root: Path) -> bool:
+    if is_disc_folder(path):
+        return False
     try:
-        files = list(path.iterdir())
+        parts = path.relative_to(archive_root).parts
+    except ValueError:
+        return False
+    category_indexes = [index for index, part in enumerate(parts) if part in ALBUM_CATEGORIES]
+    if not category_indexes:
+        return False
+    category_index = category_indexes[-1]
+    if len(parts) != category_index + 2:
+        return False
+    return has_album_evidence(path)
+
+
+def has_album_evidence(path: Path) -> bool:
+    try:
+        children = list(path.iterdir())
     except OSError:
         return False
-    return any(item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES for item in files)
+    return (
+        count_direct_audio_tracks(path) > 0
+        or has_album_artifacts(path)
+        or any(child.is_dir() and is_disc_folder(child) and count_direct_audio_tracks(child) > 0 for child in children)
+    )
+
+
+def is_disc_folder(path: Path) -> bool:
+    return bool(DISC_FOLDER_PATTERN.match(path.name.strip()))
+
+
+def disc_folders(album_path: Path) -> list[Path]:
+    try:
+        return sorted(
+            (path for path in album_path.iterdir() if path.is_dir() and is_disc_folder(path)),
+            key=lambda path: path.name.lower(),
+        )
+    except OSError:
+        return []
+
+
+def count_direct_audio_tracks(path: Path) -> int:
+    try:
+        return sum(1 for item in path.iterdir() if item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES)
+    except OSError:
+        return 0
+
+
+def has_album_artifacts(path: Path) -> bool:
+    artifacts = detect_album_artifacts(path)
+    return any(artifacts.get(name) for name in ARTIFACT_TYPES)
 
 
 def _relative(path: Path, root: Path) -> str:

@@ -7,6 +7,7 @@ from audio_division.archive_registry import (
     build_archive_registry,
     count_audio_tracks,
     discover_album_folders,
+    is_album_root,
     render_archive_registry_report,
     render_artifact_coverage_report,
 )
@@ -17,8 +18,8 @@ class ArchiveRegistryTests(unittest.TestCase):
     def test_archive_scanning_and_track_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            album = root / "Artist-Album-2026-FLAC-STiGMA"
-            album.mkdir()
+            album = root / "A" / "artist" / "Albums" / "Artist-Album-2026-FLAC-STiGMA"
+            album.mkdir(parents=True)
             (album / "01.flac").write_text("audio")
             (album / "02.flac").write_text("audio")
             ignored = root / "Docs"
@@ -31,11 +32,34 @@ class ArchiveRegistryTests(unittest.TestCase):
         self.assertEqual(folders, [album])
         self.assertEqual(tracks, 2)
 
+    def test_multidisc_release_root_excludes_disc_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            album = root / "A" / "artist" / "Albums" / "Artist-Box-2026-FLAC-STiGMA"
+            cd1 = album / "CD1"
+            cd2 = album / "Disc 2"
+            cd1.mkdir(parents=True)
+            cd2.mkdir()
+            (album / "00-release.nfo").write_text("nfo")
+            (cd1 / "01.flac").write_text("audio")
+            (cd1 / "02.flac").write_text("audio")
+            (cd2 / "03.flac").write_text("audio")
+
+            folders = discover_album_folders(root)
+            tracks = count_audio_tracks(album)
+            album_is_root = is_album_root(album, root)
+            cd1_is_root = is_album_root(cd1, root)
+
+        self.assertEqual(folders, [album])
+        self.assertTrue(album_is_root)
+        self.assertFalse(cd1_is_root)
+        self.assertEqual(tracks, 3)
+
     def test_artifact_detection_in_registry_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            album = root / "Artist-Album-2026-FLAC-STiGMA"
-            album.mkdir()
+            album = root / "A" / "artist" / "Albums" / "Artist-Album-2026-FLAC-STiGMA"
+            album.mkdir(parents=True)
             (album / "01.flac").write_text("audio")
             (album / "album.nfo").write_text("nfo")
             (album / "album.sfv").write_text("sfv")
@@ -49,7 +73,7 @@ class ArchiveRegistryTests(unittest.TestCase):
         self.assertTrue(entry["artifacts"]["nfo"])
         self.assertEqual(entry["artifacts"]["artwork_name"], "cover.jpg")
         self.assertTrue(entry["artifacts"]["validation_log"])
-        self.assertEqual(entry["relative_path"], "Artist-Album-2026-FLAC-STiGMA")
+        self.assertEqual(entry["relative_path"], "A/artist/Albums/Artist-Album-2026-FLAC-STiGMA")
 
     def test_artwork_detection_prefers_cover_folder_front_names(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -69,8 +93,8 @@ class ArchiveRegistryTests(unittest.TestCase):
     def test_registry_generation_and_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            album = root / "Artist-Album-2026-FLAC-STiGMA"
-            album.mkdir()
+            album = root / "A" / "artist" / "Albums" / "Artist-Album-2026-FLAC-STiGMA"
+            album.mkdir(parents=True)
             (album / "01.flac").write_text("audio")
 
             registry = build_archive_registry(root)
