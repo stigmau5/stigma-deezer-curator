@@ -24,6 +24,7 @@ from audio_division.layout_state import (
 from audio_division.operation_runner import run_operation
 from audio_division.playback import run_playback_action
 from audio_division.archive_reconciliation import reconcile_archive, write_archive_reconciliation_report
+from audio_division.archive_audit import audit_archive, write_archive_audit
 from audio_division.batch_operations import (
     available_batch_operations,
     collect_album_targets,
@@ -464,6 +465,7 @@ class DeezerCuratorGUI(tk.Tk):
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Refresh", command=self.refresh_archive_browser).pack(side="left")
+        ttk.Button(toolbar, text="Run Audit", command=self.run_archive_audit).pack(side="left", padx=(6, 0))
         ttk.Label(toolbar, text="Artist").pack(side="left", padx=(12, 4))
         artist_filter = ttk.Entry(toolbar, textvariable=self.archive_artist_var, width=24)
         artist_filter.pack(side="left")
@@ -1099,6 +1101,28 @@ class DeezerCuratorGUI(tk.Tk):
                 f"{summary.get('albums_missing', 0)} missing, "
                 f"{summary.get('albums_added', 0)} added, "
                 f"{summary.get('disc_folder_album_rows', 0)} disc rows"
+            )
+        )
+
+    def run_archive_audit(self):
+        registry = load_json(DATA_DIR / "archive_registry.json")
+        archive_root_text = registry.get("archive_root") or self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
+        if not archive_root_text:
+            self.status.config(text="Archive audit failed: Main Archive Root is not configured")
+            return
+        archive_root = Path(archive_root_text)
+        report = audit_archive(registry, archive_root)
+        reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
+        if not reports_dir.is_absolute():
+            reports_dir = BASE_DIR / reports_dir
+        write_archive_audit(report, reports_dir)
+        summary = report.get("summary", {})
+        self.status.config(
+            text=(
+                "Archive audit written: "
+                f"{summary.get('albums_scanned', 0)} scanned, "
+                f"{summary.get('warnings', 0)} warnings, "
+                f"{summary.get('errors', 0)} errors"
             )
         )
 
