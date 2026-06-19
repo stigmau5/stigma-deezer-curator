@@ -23,6 +23,7 @@ from audio_division.layout_state import (
 )
 from audio_division.operation_runner import run_operation
 from audio_division.playback import run_playback_action
+from audio_division.archive_reconciliation import reconcile_archive, write_archive_reconciliation_report
 from audio_division.batch_operations import (
     available_batch_operations,
     collect_album_targets,
@@ -975,6 +976,7 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(buttons, text="Generate SFV", command=lambda: self.run_archive_operation("generate_sfv")).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Validate Album", command=lambda: self.run_archive_operation("validate_album")).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Open Folder", command=lambda: self.run_archive_operation("open_album_folder")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Reconcile Archive", command=self.reconcile_archive_report).pack(side="left", padx=(6, 0))
 
         history = ttk.LabelFrame(parent, text="Recent Operations", padding=8)
         history.pack(fill="x", pady=(10, 0))
@@ -1051,6 +1053,27 @@ class DeezerCuratorGUI(tk.Tk):
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
         self.status.config(text=f"{operation_id}: {result['result']} - {result['message']}")
         self.refresh_audio_dashboard()
+
+    def reconcile_archive_report(self):
+        archive_root = self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
+        if not archive_root:
+            self.status.config(text="Archive reconciliation failed: Main Archive Root is not configured")
+            return
+        registry = load_json(DATA_DIR / "archive_registry.json")
+        report = reconcile_archive(Path(archive_root), registry)
+        reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
+        if not reports_dir.is_absolute():
+            reports_dir = BASE_DIR / reports_dir
+        write_archive_reconciliation_report(report, reports_dir)
+        summary = report.get("summary", {})
+        self.status.config(
+            text=(
+                "Archive reconciliation report written: "
+                f"{summary.get('albums_missing', 0)} missing, "
+                f"{summary.get('albums_added', 0)} added, "
+                f"{summary.get('disc_folder_album_rows', 0)} disc rows"
+            )
+        )
 
     def refresh_library(self):
         try:
