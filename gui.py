@@ -52,9 +52,12 @@ from audio_division.selection_state import (
 )
 from audio_division.processing_queue import (
     load_processing_queue,
-    processing_rows,
     queue_for_processing,
     save_processing_queue,
+)
+from audio_division.closed_loop_monitor import (
+    discover_incoming_albums,
+    queue_album_payload,
 )
 from audio_division.integration import run_audio_division_process_album
 from audio_division.maintenance import (
@@ -190,6 +193,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_operation_result_var = tk.StringVar()
         self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
         self.processing_queue_rows: list[dict] = []
+        self.closed_loop_rows: list[dict] = []
         self.maintenance_rows: list[dict] = []
         self.maintenance_album_rows: list[dict] = []
         self.selected_maintenance_id = ""
@@ -498,11 +502,11 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_album_tree.pack(fill="both", expand=True)
         self.archive_album_tree.bind("<<TreeviewSelect>>", self.on_archive_album_selected)
 
-        processing = ttk.LabelFrame(album_frame, text="Processing", padding=4)
+        processing = ttk.LabelFrame(album_frame, text="Closed Loop Monitor", padding=4)
         processing.pack(fill="x", pady=(6, 0))
         self.processing_queue_tree = ttk.Treeview(
             processing,
-            columns=("album", "source", "state"),
+            columns=("album", "source", "folder", "state"),
             show="headings",
             height=5,
             selectmode="browse",
@@ -510,11 +514,16 @@ class DeezerCuratorGUI(tk.Tk):
         for column, title, width in (
             ("album", "Album", 210),
             ("source", "Source", 80),
+            ("folder", "Folder", 220),
             ("state", "Current State", 120),
         ):
             self.processing_queue_tree.heading(column, text=title)
             self.processing_queue_tree.column(column, width=width, anchor="w")
         self.processing_queue_tree.pack(fill="x", expand=False)
+        monitor_actions = ttk.Frame(processing)
+        monitor_actions.pack(fill="x", pady=(4, 0))
+        ttk.Button(monitor_actions, text="Open Folder", command=self.open_selected_incoming_folder).pack(side="left")
+        ttk.Button(monitor_actions, text="Queue For Processing", command=self.queue_selected_incoming_album).pack(side="left", padx=(4, 0))
 
         maintenance = ttk.LabelFrame(album_frame, text="Maintenance Center", padding=4)
         maintenance.pack(fill="both", expand=True, pady=(6, 0))
@@ -1349,7 +1358,12 @@ class DeezerCuratorGUI(tk.Tk):
     def refresh_processing_queue_view(self):
         if not hasattr(self, "processing_queue_tree"):
             return
-        self.processing_queue_rows = processing_rows(self.filtered_archive_albums, self.processing_queue)
+        self.processing_queue_rows = discover_incoming_albums(
+            self.audio_settings,
+            self.archive_albums,
+            self.processing_queue,
+        )
+        self.closed_loop_rows = self.processing_queue_rows
         for item in self.processing_queue_tree.get_children():
             self.processing_queue_tree.delete(item)
         for index, row in enumerate(self.processing_queue_rows[:100]):
@@ -1360,9 +1374,41 @@ class DeezerCuratorGUI(tk.Tk):
                 values=(
                     row.get("album", ""),
                     row.get("source", ""),
-                    row.get("current_state", ""),
+                    self._shorten_path(row.get("folder", ""), max_chars=38),
+                    row.get("state", ""),
                 ),
             )
+
+    def selected_incoming_album(self) -> dict:
+        selection = self.processing_queue_tree.selection() if hasattr(self, "processing_queue_tree") else []
+        if not selection:
+            return {}
+        index = int(selection[0])
+        if index >= len(self.closed_loop_rows):
+            return {}
+        return self.closed_loop_rows[index]
+
+    def open_selected_incoming_folder(self):
+        row = self.selected_incoming_album()
+        if not row:
+            self.archive_operation_result_var.set("Failure: no incoming album selected.")
+            return
+        result = run_operation("open_album_folder", row.get("folder", ""), self.audio_settings, OPERATION_HISTORY_FILE)
+        self.archive_operation_result_var.set(f"Open Folder: {result['result'].title()} - {result['message']}")
+
+    def queue_selected_incoming_album(self):
+        row = self.selected_incoming_album()
+        if not row:
+            self.archive_operation_result_var.set("Failure: no incoming album selected.")
+            return
+        self.processing_queue = queue_for_processing(
+            self.processing_queue,
+            queue_album_payload(row),
+            source=row.get("source", "incoming"),
+        )
+        save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
+        self.refresh_processing_queue_view()
+        self.archive_operation_result_var.set("Incoming album queued for processing.")
 
     def refresh_maintenance_view(self):
         if not hasattr(self, "maintenance_tree"):
