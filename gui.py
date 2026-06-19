@@ -22,6 +22,7 @@ from audio_division.layout_state import (
     valid_window_geometry,
 )
 from audio_division.operation_runner import run_operation
+from audio_division.playback import run_playback_action
 from audio_division.batch_operations import (
     available_batch_operations,
     collect_album_targets,
@@ -447,6 +448,8 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(buttons, text="Generate NFO", command=lambda: self.run_library_album_operation("generate_nfo")).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Generate SFV", command=lambda: self.run_library_album_operation("generate_sfv")).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Open Folder", command=lambda: self.run_library_album_operation("open_album_folder")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Play Album", command=lambda: self.run_library_album_playback("play_album")).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Play Playlist", command=lambda: self.run_library_album_playback("play_playlist")).pack(side="left", padx=(6, 0))
         ttk.Label(operations, textvariable=self.library_operation_result_var).pack(anchor="w", pady=(6, 0))
 
         self.refresh_library()
@@ -590,11 +593,13 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(operations, text="NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).grid(row=0, column=1, sticky="ew", pady=(0, 3))
         ttk.Button(operations, text="SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).grid(row=1, column=0, sticky="ew", padx=(0, 3))
         ttk.Button(operations, text="Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=1, column=1, sticky="ew")
-        ttk.Button(operations, text="Queue", command=self.queue_selected_archive_album_for_processing).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 0))
-        ttk.Button(operations, text="Process Album", command=self.process_selected_archive_album).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        ttk.Button(operations, text="Play Album", command=lambda: self.run_archive_album_playback("play_album")).grid(row=2, column=0, sticky="ew", padx=(0, 3), pady=(3, 0))
+        ttk.Button(operations, text="Playlist", command=lambda: self.run_archive_album_playback("play_playlist")).grid(row=2, column=1, sticky="ew", pady=(3, 0))
+        ttk.Button(operations, text="Queue", command=self.queue_selected_archive_album_for_processing).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        ttk.Button(operations, text="Process Album", command=self.process_selected_archive_album).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         operations.columnconfigure(0, weight=1)
         operations.columnconfigure(1, weight=1)
-        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         self.archive_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
         details = ttk.Frame(summary)
@@ -994,6 +999,9 @@ class DeezerCuratorGUI(tk.Tk):
             ("tools", "sfv_generator_path", "SFV Generator Path"),
             ("tools", "flac_validator_path", "FLAC Validator Path"),
             ("tools", "file_manager_path", "File Manager Path"),
+            ("playback", "provider", "Player Provider"),
+            ("playback", "player_path", "Player Path"),
+            ("playback", "player_args", "Player Arguments"),
         ]
         form = ttk.Frame(parent)
         form.pack(fill="both", expand=True)
@@ -1254,6 +1262,15 @@ class DeezerCuratorGUI(tk.Tk):
         )
         if selection.active_tab:
             self.tabs.select(selection.active_tab)
+        self.refresh_audio_dashboard()
+
+    def run_archive_album_playback(self, operation_id: str):
+        target, reason = album_archive_operation_target(self.archive_selected_album)
+        if not target:
+            self.archive_operation_result_var.set(f"Failure: {reason}")
+            return
+        result = run_playback_action(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
         self.refresh_audio_dashboard()
 
     def queue_selected_archive_album_for_processing(self):
@@ -1573,6 +1590,15 @@ class DeezerCuratorGUI(tk.Tk):
         if album_id:
             self.library_selected_album = album_details(self.library_data, album_id)
             self.set_library_detail(self.library_selected_album)
+        self.refresh_audio_dashboard()
+
+    def run_library_album_playback(self, operation_id: str):
+        target, reason = album_archive_operation_target(self.library_selected_album)
+        if not target:
+            self.library_operation_result_var.set(f"Failure: {reason}")
+            return
+        result = run_playback_action(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
+        self.library_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
         self.refresh_audio_dashboard()
 
     def refresh_opportunities(self):

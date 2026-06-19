@@ -30,6 +30,11 @@ DEFAULT_SETTINGS = {
         "flac_validator_path": "",
         "file_manager_path": "xdg-open",
     },
+    "playback": {
+        "provider": "mpv",
+        "player_path": "mpv",
+        "player_args": "",
+    },
     "ui": {
         "window_geometry": "",
         "archive_main_panes": "",

@@ -6,6 +6,7 @@ from typing import Any
 from audio_division.album_presentation import album_presentation
 from audio_division.archive_registry import AUDIO_SUFFIXES
 from audio_division.cover_widget import album_cover_info
+from audio_division.playback import playback_summary
 
 PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
 NFO_READ_LIMIT = 20000
@@ -25,6 +26,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
         "status_glance": status_glance(status, readiness),
         "nfo": nfo,
         "tracklist": tracklist,
+        "playback": playback_summary(details),
     }
 
 
