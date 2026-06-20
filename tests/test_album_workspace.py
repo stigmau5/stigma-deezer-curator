@@ -107,6 +107,7 @@ class AlbumWorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace["nfo"]["status"], "Present")
         self.assertEqual(workspace["tracklist"]["source"], "filesystem")
         self.assertEqual(workspace["files"]["source"], "filesystem")
+        self.assertIn("integrity", workspace)
         self.assertIn(("Readiness", "ARCHIVE_READY"), workspace["status_glance"])
 
     def test_cover_info_prefers_named_album_artwork(self):

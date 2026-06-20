@@ -627,6 +627,12 @@ class DeezerCuratorGUI(tk.Tk):
             value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 10), pady=1)
             self.archive_status_glance_labels[field] = value
 
+        integrity = ttk.LabelFrame(visual, text="Album Integrity", padding=6)
+        integrity.pack(fill="x", pady=(0, 8))
+        self.archive_integrity_text = tk.Text(integrity, height=9, wrap="word", font="TkFixedFont")
+        self.archive_integrity_text.pack(fill="x")
+        self.archive_integrity_text.config(state="disabled")
+
         operations = ttk.LabelFrame(visual, text="Operations", padding=6)
         operations.pack(fill="x")
         ttk.Button(operations, text="Validate", command=lambda: self.run_archive_album_operation("validate_album")).grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=(0, 3))
@@ -713,6 +719,12 @@ class DeezerCuratorGUI(tk.Tk):
             value = ttk.Label(status, text="Unknown")
             value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=1)
             self.library_status_glance_labels[field] = value
+
+        integrity = ttk.LabelFrame(album_header, text="Album Integrity", padding=6)
+        integrity.pack(fill="x", pady=(8, 0))
+        self.library_integrity_text = tk.Text(integrity, height=9, wrap="word", font="TkFixedFont")
+        self.library_integrity_text.pack(fill="x")
+        self.library_integrity_text.config(state="disabled")
 
         middle = ttk.Panedwindow(workspace, orient="horizontal")
         workspace.add(middle, weight=1)
@@ -1343,6 +1355,7 @@ class DeezerCuratorGUI(tk.Tk):
             if field in self.archive_status_glance_labels:
                 self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_archive_thumbnail(workspace.get("cover", {}))
+        self._set_text_widget(self.archive_integrity_text, self._format_integrity(workspace.get("integrity", {})))
         files = workspace.get("files", {})
         self._set_text_widget(
             self.archive_files_text,
@@ -1659,6 +1672,7 @@ class DeezerCuratorGUI(tk.Tk):
             if field in self.library_status_glance_labels:
                 self.library_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_library_thumbnail(workspace.get("cover", {}))
+        self._set_text_widget(self.library_integrity_text, self._format_integrity(workspace.get("integrity", {})))
         files = workspace.get("files", {})
         self._set_text_widget(
             self.library_files_text,
@@ -1702,6 +1716,28 @@ class DeezerCuratorGUI(tk.Tk):
         widget.delete("1.0", tk.END)
         widget.insert(tk.END, text)
         widget.config(state="disabled")
+
+    def _format_integrity(self, integrity: dict) -> str:
+        if not integrity:
+            return "No album selected."
+        lines = []
+        for check in integrity.get("checks", []):
+            status = check.get("status", "Unknown")
+            marker = "OK" if status == "Present" else "--"
+            source = check.get("source", "none")
+            detail = check.get("path", "")
+            suffix = f" ({source})" if source and source != "none" else ""
+            if detail:
+                suffix += f" - {detail}"
+            lines.append(f"{marker} {check.get('label', '')}: {status}{suffix}")
+        lines.append("")
+        lines.append(f"Health Score: {integrity.get('health_score', 0)}%")
+        warnings = integrity.get("warnings", [])
+        if warnings:
+            lines.append("")
+            lines.append("Warnings:")
+            lines.extend(f"- {warning}" for warning in warnings)
+        return "\n".join(lines)
 
     def show_nfo_viewer(self, nfo: dict, album: dict):
         if not nfo.get("path"):

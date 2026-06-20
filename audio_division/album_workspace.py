@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from audio_division.album_integrity import album_integrity
 from audio_division.album_presentation import album_presentation
 from audio_division.archive_registry import AUDIO_SUFFIXES
 from audio_division.cover_widget import album_cover_info
@@ -19,6 +20,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
     nfo = nfo_info(archive_path)
     tracklist = tracklist_info(archive_path, details, metadata or {})
     files = filesystem_listing(archive_path)
+    integrity = album_integrity(details)
     status = details.get("album_status", {})
     readiness = details.get("archive_readiness", {})
     return {
@@ -28,6 +30,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
         "nfo": nfo,
         "tracklist": tracklist,
         "files": files,
+        "integrity": integrity,
         "playback": playback_summary(details),
     }
 
