@@ -18,6 +18,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
     cover = cover_info(details, archive_path)
     nfo = nfo_info(archive_path)
     tracklist = tracklist_info(archive_path, details, metadata or {})
+    files = filesystem_listing(archive_path)
     status = details.get("album_status", {})
     readiness = details.get("archive_readiness", {})
     return {
@@ -26,6 +27,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
         "status_glance": status_glance(status, readiness),
         "nfo": nfo,
         "tracklist": tracklist,
+        "files": files,
         "playback": playback_summary(details),
     }
 
@@ -103,6 +105,38 @@ def filesystem_tracks(path: Path) -> list[str]:
         return []
     tracks = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES)
     return [_display_track(item.name, index) for index, item in enumerate(tracks, start=1)]
+
+
+def filesystem_listing(path: Path | None) -> dict[str, Any]:
+    if not path or not path.exists() or not path.is_dir():
+        return {"source": "missing", "path": "", "items": ["No archive folder available."]}
+    try:
+        children = sorted(path.iterdir(), key=lambda item: (item.name.lower(), item.is_file()))
+    except OSError as exc:
+        return {"source": "unreadable", "path": str(path), "items": [str(exc)]}
+    items: list[str] = []
+    for child in children:
+        items.extend(_filesystem_listing_lines(child, 0))
+    if not items:
+        items.append("Album folder is empty.")
+    return {"source": "filesystem", "path": str(path), "items": items}
+
+
+def _filesystem_listing_lines(path: Path, depth: int) -> list[str]:
+    prefix = "  " * depth
+    if path.is_file():
+        return [f"{prefix}{path.name}"]
+    if not path.is_dir():
+        return [f"{prefix}{path.name}"]
+    lines = [f"{prefix}{path.name}"]
+    try:
+        children = sorted(path.iterdir(), key=lambda item: (item.name.lower(), item.is_file()))
+    except OSError as exc:
+        lines.append(f"{prefix}  {exc}")
+        return lines
+    for child in children:
+        lines.extend(_filesystem_listing_lines(child, depth + 1))
+    return lines
 
 
 def metadata_tracks(album_id: Any, metadata: dict[str, Any]) -> list[str]:

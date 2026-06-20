@@ -4,6 +4,7 @@ from pathlib import Path
 
 from audio_division.album_workspace import (
     album_workspace,
+    filesystem_listing,
     filesystem_tracks,
     metadata_tracks,
     nfo_info,
@@ -63,6 +64,26 @@ class AlbumWorkspaceTests(unittest.TestCase):
 
         self.assertEqual(tracks, ["01 - 01 - First", "02 - 02 - Second"])
 
+    def test_filesystem_listing_preserves_multidisc_hierarchy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp)
+            (album / "00-release.nfo").write_text("nfo")
+            cd1 = album / "CD1"
+            cd2 = album / "CD2"
+            cd1.mkdir()
+            cd2.mkdir()
+            (cd1 / "01_song.flac").write_text("audio")
+            (cd2 / "01_other.flac").write_text("audio")
+
+            listing = filesystem_listing(album)
+
+        self.assertEqual(listing["source"], "filesystem")
+        self.assertIn("00-release.nfo", listing["items"])
+        self.assertIn("CD1", listing["items"])
+        self.assertIn("  01_song.flac", listing["items"])
+        self.assertIn("CD2", listing["items"])
+        self.assertIn("  01_other.flac", listing["items"])
+
     def test_metadata_tracks_are_fallback(self):
         metadata = {
             "albums": {"302127": {"track_ids": ["2", "1"]}},
@@ -85,6 +106,7 @@ class AlbumWorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace["cover"]["source"], "local")
         self.assertEqual(workspace["nfo"]["status"], "Present")
         self.assertEqual(workspace["tracklist"]["source"], "filesystem")
+        self.assertEqual(workspace["files"]["source"], "filesystem")
         self.assertIn(("Readiness", "ARCHIVE_READY"), workspace["status_glance"])
 
     def test_cover_info_prefers_named_album_artwork(self):

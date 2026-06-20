@@ -192,6 +192,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_artist_var = tk.StringVar()
         self.archive_album_var = tk.StringVar()
         self.archive_operation_result_var = tk.StringVar()
+        self.archive_audit_status_var = tk.StringVar(value="")
+        self._archive_audit_running = False
+        self.archive_current_nfo: dict = {}
+        self.library_current_nfo: dict = {}
         self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
         self.processing_queue_rows: list[dict] = []
         self.closed_loop_rows: list[dict] = []
@@ -465,7 +469,9 @@ class DeezerCuratorGUI(tk.Tk):
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Refresh", command=self.refresh_archive_browser).pack(side="left")
-        ttk.Button(toolbar, text="Run Audit", command=self.run_archive_audit).pack(side="left", padx=(6, 0))
+        self.archive_audit_button = ttk.Button(toolbar, text="Run Audit", command=self.run_archive_audit)
+        self.archive_audit_button.pack(side="left", padx=(6, 0))
+        ttk.Label(toolbar, textvariable=self.archive_audit_status_var).pack(side="left", padx=(8, 0))
         ttk.Label(toolbar, text="Artist").pack(side="left", padx=(12, 4))
         artist_filter = ttk.Entry(toolbar, textvariable=self.archive_artist_var, width=24)
         artist_filter.pack(side="left")
@@ -667,12 +673,18 @@ class DeezerCuratorGUI(tk.Tk):
         evidence = ttk.Panedwindow(workspace, orient="horizontal")
         workspace.add(evidence, weight=5)
         self.layout_panes["archive_evidence"] = evidence
-        track_frame = ttk.LabelFrame(evidence, text="Tracklist", padding=6)
-        evidence.add(track_frame, weight=1)
-        self.archive_tracklist_text = self._build_scrolled_text(track_frame)
-        self.archive_tracklist_text.config(state="disabled")
+        files_frame = ttk.LabelFrame(evidence, text="Files", padding=6)
+        evidence.add(files_frame, weight=1)
+        self.archive_files_text = self._build_scrolled_text(files_frame)
+        self.archive_files_text.config(state="disabled")
         nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
         evidence.add(nfo_frame, weight=2)
+        self.archive_view_nfo_button = ttk.Button(
+            nfo_frame,
+            text="View NFO",
+            command=lambda: self.show_nfo_viewer(self.archive_current_nfo, self.archive_selected_album),
+        )
+        self.archive_view_nfo_button.pack(anchor="w", pady=(0, 6))
         self.archive_nfo_text = self._build_scrolled_text(nfo_frame)
         self.archive_nfo_text.config(state="disabled")
 
@@ -721,13 +733,19 @@ class DeezerCuratorGUI(tk.Tk):
         evidence = ttk.Panedwindow(workspace, orient="horizontal")
         workspace.add(evidence, weight=4)
         self.layout_panes["library_evidence"] = evidence
-        track_frame = ttk.LabelFrame(evidence, text="Tracklist", padding=6)
-        evidence.add(track_frame, weight=1)
-        self.library_tracklist_text = self._build_scrolled_text(track_frame)
-        self.library_tracklist_text.config(state="disabled")
+        files_frame = ttk.LabelFrame(evidence, text="Files", padding=6)
+        evidence.add(files_frame, weight=1)
+        self.library_files_text = self._build_scrolled_text(files_frame)
+        self.library_files_text.config(state="disabled")
 
         nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
         evidence.add(nfo_frame, weight=1)
+        self.library_view_nfo_button = ttk.Button(
+            nfo_frame,
+            text="View NFO",
+            command=lambda: self.show_nfo_viewer(self.library_current_nfo, self.library_selected_album),
+        )
+        self.library_view_nfo_button.pack(anchor="w", pady=(0, 6))
         self.library_nfo_text = self._build_scrolled_text(nfo_frame)
         self.library_nfo_text.config(state="disabled")
 
@@ -1115,20 +1133,43 @@ class DeezerCuratorGUI(tk.Tk):
             self.status.config(text="Archive audit failed: Main Archive Root is not configured")
             return
         archive_root = Path(archive_root_text)
-        report = audit_archive(registry, archive_root)
         reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
         if not reports_dir.is_absolute():
             reports_dir = BASE_DIR / reports_dir
-        write_archive_audit(report, reports_dir)
-        summary = report.get("summary", {})
-        self.status.config(
-            text=(
+        if self._archive_audit_running:
+            return
+        self._set_archive_audit_running(True, "Archive audit running...")
+        thread = threading.Thread(
+            target=self._run_archive_audit_thread,
+            args=(registry, archive_root, reports_dir),
+            daemon=True,
+        )
+        thread.start()
+
+    def _set_archive_audit_running(self, running: bool, message: str):
+        self._archive_audit_running = running
+        state = "disabled" if running else "normal"
+        if hasattr(self, "archive_audit_button"):
+            self.archive_audit_button.config(state=state)
+        if hasattr(self, "archive_audit_status_var"):
+            self.archive_audit_status_var.set(message)
+        self.status.config(text=message)
+
+    def _run_archive_audit_thread(self, registry: dict, archive_root: Path, reports_dir: Path):
+        try:
+            report = audit_archive(registry, archive_root)
+            self.after(0, lambda: self.archive_audit_status_var.set("Writing archive audit report..."))
+            write_archive_audit(report, reports_dir)
+            summary = report.get("summary", {})
+            message = (
                 "Archive audit written: "
                 f"{summary.get('albums_scanned', 0)} scanned, "
                 f"{summary.get('warnings', 0)} warnings, "
                 f"{summary.get('errors', 0)} errors"
             )
-        )
+        except Exception as exc:
+            message = f"Archive audit failed: {exc}"
+        self.after(0, lambda message=message: self._set_archive_audit_running(False, message))
 
     def refresh_library(self):
         try:
@@ -1302,15 +1343,18 @@ class DeezerCuratorGUI(tk.Tk):
             if field in self.archive_status_glance_labels:
                 self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_archive_thumbnail(workspace.get("cover", {}))
-        tracklist = workspace.get("tracklist", {})
+        files = workspace.get("files", {})
         self._set_text_widget(
-            self.archive_tracklist_text,
-            f"Source: {tracklist.get('source', 'missing')}\n\n" + "\n".join(tracklist.get("tracks", [])),
+            self.archive_files_text,
+            f"Source: {files.get('source', 'missing')}\nPath: {files.get('path', '')}\n\n"
+            + "\n".join(files.get("items", [])),
         )
         nfo = workspace.get("nfo", {})
+        self.archive_current_nfo = nfo
+        self.archive_view_nfo_button.config(state="normal" if nfo.get("path") else "disabled")
         self._set_text_widget(
             self.archive_nfo_text,
-            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}\n\n{nfo.get('content', '')}",
+            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}",
         )
 
     def _set_archive_thumbnail(self, thumbnail: dict):
@@ -1615,15 +1659,18 @@ class DeezerCuratorGUI(tk.Tk):
             if field in self.library_status_glance_labels:
                 self.library_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_library_thumbnail(workspace.get("cover", {}))
-        tracklist = workspace.get("tracklist", {})
+        files = workspace.get("files", {})
         self._set_text_widget(
-            self.library_tracklist_text,
-            f"Source: {tracklist.get('source', 'missing')}\n\n" + "\n".join(tracklist.get("tracks", [])),
+            self.library_files_text,
+            f"Source: {files.get('source', 'missing')}\nPath: {files.get('path', '')}\n\n"
+            + "\n".join(files.get("items", [])),
         )
         nfo = workspace.get("nfo", {})
+        self.library_current_nfo = nfo
+        self.library_view_nfo_button.config(state="normal" if nfo.get("path") else "disabled")
         self._set_text_widget(
             self.library_nfo_text,
-            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}\n\n{nfo.get('content', '')}",
+            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}",
         )
 
     def _set_library_thumbnail(self, thumbnail: dict):
@@ -1655,6 +1702,36 @@ class DeezerCuratorGUI(tk.Tk):
         widget.delete("1.0", tk.END)
         widget.insert(tk.END, text)
         widget.config(state="disabled")
+
+    def show_nfo_viewer(self, nfo: dict, album: dict):
+        if not nfo.get("path"):
+            return
+        title = album.get("title") or album.get("album") or "Album NFO"
+        window = tk.Toplevel(self)
+        window.title(f"NFO - {title}")
+        window.geometry("900x620")
+        window.transient(self)
+        window.grab_set()
+
+        body = ttk.Frame(window, padding=8)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=str(nfo.get("path", "")), wraplength=860).pack(anchor="w", pady=(0, 6))
+
+        text_frame = ttk.Frame(body)
+        text_frame.pack(fill="both", expand=True)
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+        viewer = tk.Text(text_frame, wrap="none", font="TkFixedFont")
+        yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=viewer.yview)
+        xscroll = ttk.Scrollbar(text_frame, orient="horizontal", command=viewer.xview)
+        viewer.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        viewer.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        viewer.insert(tk.END, str(nfo.get("content", "")))
+        viewer.config(state="disabled")
+
+        ttk.Button(body, text="Close", command=window.destroy).pack(anchor="e", pady=(8, 0))
 
     def refresh_artwork_browser(self):
         if not hasattr(self, "artwork_tree"):
