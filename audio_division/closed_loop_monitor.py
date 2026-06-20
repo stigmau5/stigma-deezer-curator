@@ -5,14 +5,19 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from audio_division.lifecycle_state import (
+    STATE_ARCHIVED,
+    STATE_DOWNLOADED,
+    STATE_READY_FOR_PROCESSING,
+    STATE_UNKNOWN,
+    detect_lifecycle_state,
+)
 from audio_division.physical_archive import split_folder_name
 
 
 DEFAULT_SOURCE = "Deezer"
-STATE_DOWNLOADED = "Downloaded"
-STATE_NEEDS_PROCESSING = "Needs Processing"
-STATE_PROCESSING = "Processing"
-STATE_ARCHIVED = "Archived"
+STATE_NEEDS_PROCESSING = STATE_READY_FOR_PROCESSING
+STATE_PROCESSING = STATE_READY_FOR_PROCESSING
 
 
 def incoming_sources(settings: dict[str, Any]) -> list[dict[str, str]]:
@@ -51,6 +56,15 @@ def discover_source(
         key = folder_identity_key(folder.name)
         if key in archived_keys:
             continue
+        pipeline = detect_lifecycle_state(
+            {
+                "artist": artist,
+                "album": album,
+                "folder": str(folder),
+                "archive_path": "",
+            },
+            (queue or {}).get("albums", {}).get(str(folder), {}),
+        )
         rows.append(
             {
                 "key": str(folder),
@@ -58,7 +72,8 @@ def discover_source(
                 "album": album,
                 "source": source,
                 "folder": str(folder),
-                "state": incoming_state(folder, queue or {}),
+                "state": pipeline.state,
+                "pipeline_state": pipeline.to_dict(),
                 "identity_key": key,
             }
         )
@@ -67,14 +82,8 @@ def discover_source(
 
 def incoming_state(folder: Path | str, queue: dict[str, Any]) -> str:
     entry = queue.get("albums", {}).get(str(folder), {})
-    state = entry.get("state", "")
-    if state == "ARCHIVED":
-        return STATE_ARCHIVED
-    if state == "PROCESSING":
-        return STATE_PROCESSING
-    if has_processing_evidence(Path(folder)):
-        return STATE_NEEDS_PROCESSING
-    return STATE_DOWNLOADED
+    pipeline = detect_lifecycle_state({"folder": str(folder)}, entry)
+    return pipeline.state
 
 
 def has_processing_evidence(folder: Path) -> bool:
@@ -99,14 +108,14 @@ def archived_folder_keys(archive_albums: list[dict[str, Any]]) -> set[str]:
 def closed_loop_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     counts = {
         STATE_DOWNLOADED: 0,
-        STATE_NEEDS_PROCESSING: 0,
-        STATE_PROCESSING: 0,
+        STATE_READY_FOR_PROCESSING: 0,
         STATE_ARCHIVED: 0,
+        STATE_UNKNOWN: 0,
     }
     sources: set[str] = set()
     for row in rows:
         state = row.get("state", STATE_DOWNLOADED)
-        counts[state if state in counts else STATE_DOWNLOADED] += 1
+        counts[state if state in counts else STATE_UNKNOWN] += 1
         if row.get("source"):
             sources.add(str(row["source"]))
     return {"incoming_albums": len(rows), "sources": len(sources), "states": counts}

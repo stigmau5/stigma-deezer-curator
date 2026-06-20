@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.album_truth import album_truth
+from audio_division.lifecycle_state import attach_lifecycle_state
 from audio_division.metadata_status import album_metadata_status
 
 
@@ -95,7 +96,7 @@ def project_archive_album(
     )
     status = truth.to_album_status()
     readiness = archive_readiness(status)
-    return {
+    projected = {
         "album_id": album_id,
         "artist_key": artist_key(artist),
         "artist": artist,
@@ -133,6 +134,7 @@ def project_archive_album(
         },
         "artwork": {"cover_identity": metadata_album.get("cover_identity", ""), "urls": covers, "local": artifacts.get("artwork_path", "")},
     }
+    return attach_lifecycle_state(projected)
 
 
 def archive_tree(albums: list[dict[str, Any]]) -> list[dict[str, Any]]:

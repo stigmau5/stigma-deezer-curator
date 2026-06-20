@@ -21,6 +21,7 @@ def album(
     sfv: str = "Present",
     metadata: str = "CACHED",
     readiness: str = "ARCHIVE_READY",
+    pipeline_state: str = "ARCHIVED",
 ):
     items = {
         "validation": validation,
@@ -39,6 +40,7 @@ def album(
         "metadata_status": metadata,
         "album_truth": {"items": items, "readiness": readiness, "metadata_status": metadata},
         "album_status": {"items": items},
+        "pipeline_state": {"state": pipeline_state, "evidence": ["test"], "reason": "test", "confidence": "HIGH"},
     }
 
 
@@ -46,8 +48,8 @@ class MaintenanceTests(unittest.TestCase):
     def test_maintenance_counts(self):
         albums = [
             album("1"),
-            album("2", validation="Missing", readiness="NEEDS_VALIDATION"),
-            album("3", nfo="Missing", readiness="NEEDS_DOCUMENTATION"),
+            album("2", validation="Missing", readiness="NEEDS_VALIDATION", pipeline_state="DOWNLOADED"),
+            album("3", nfo="Missing", readiness="NEEDS_DOCUMENTATION", pipeline_state="VALIDATED"),
         ]
 
         counts = maintenance_counts(albums)
@@ -56,6 +58,9 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(counts["artists"], 1)
         self.assertEqual(counts["validation_coverage"], 66.7)
         self.assertEqual(counts["documentation_coverage"], 66.7)
+        self.assertEqual(counts["downloaded"], 1)
+        self.assertEqual(counts["validated"], 1)
+        self.assertEqual(counts["archived"], 1)
 
     def test_maintenance_categories(self):
         albums = [

@@ -17,6 +17,7 @@ def album_presentation(details: dict[str, Any]) -> dict[str, Any]:
     status_items = status.get("items", {})
     readiness = details.get("archive_readiness", {})
     metadata_detail = details.get("metadata_detail", {})
+    pipeline_state = details.get("pipeline_state", {})
     cached_fields = metadata_detail.get("cached_fields", {})
     missing_fields = metadata_detail.get("missing_fields", [])
 
@@ -26,6 +27,9 @@ def album_presentation(details: dict[str, Any]) -> dict[str, Any]:
             ("Artist", details.get("artist") or ""),
             ("Year", details.get("year") or ""),
             ("Record type", details.get("record_type") or ""),
+            ("Lifecycle state", pipeline_state.get("state") or "UNKNOWN"),
+            ("Lifecycle evidence", ", ".join(pipeline_state.get("evidence", []))),
+            ("Lifecycle reason", pipeline_state.get("reason") or ""),
         ],
         "artwork": [
             ("Artwork status", status_items.get("artwork", "Unknown")),

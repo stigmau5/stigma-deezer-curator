@@ -8,6 +8,7 @@ from audio_division.album_truth import album_truth, truth_summary as album_truth
 from audio_division.artifacts import detect_album_artifacts
 from audio_division.archive_readiness import annotate_library_readiness
 from audio_division.dashboard import load_json
+from audio_division.lifecycle_state import attach_lifecycle_state
 from audio_division.metadata_status import album_metadata_status
 from curator.atomic import atomic_write_text
 
@@ -242,7 +243,7 @@ def _album_record(
     status = truth.to_album_status()
     validation_status = "validated" if truth.validation.present else "not_validated"
 
-    return {
+    record = {
         "album_id": album_id,
         "artist_key": _artist_key(artist),
         "artist": artist,
@@ -282,6 +283,7 @@ def _album_record(
             "local": artifacts.get("artwork_path") if artifacts else None,
         },
     }
+    return attach_lifecycle_state(record)
 
 
 def _path_resolution(path: Path, folder: str, confidence: str, reason: str) -> dict[str, Any]:

@@ -535,6 +535,10 @@ class DeezerCuratorGUI(tk.Tk):
             ("albums", "Albums"),
             ("artists", "Artists"),
             ("warnings", "Warnings"),
+            ("downloaded", "Downloaded"),
+            ("validated", "Validated"),
+            ("ready_for_processing", "Ready For Processing"),
+            ("archived", "Archived"),
             ("validation_coverage", "Validation Coverage"),
             ("documentation_coverage", "Documentation Coverage"),
         ):
@@ -638,7 +642,7 @@ class DeezerCuratorGUI(tk.Tk):
         details.columnconfigure(1, weight=1)
         details.rowconfigure(1, weight=1)
         for index, (section_id, title, fields) in enumerate((
-            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
+            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type", "Lifecycle state", "Lifecycle evidence", "Lifecycle reason")),
             ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Contributors", "Metadata status")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         )):
@@ -701,7 +705,7 @@ class DeezerCuratorGUI(tk.Tk):
         middle = ttk.Panedwindow(workspace, orient="horizontal")
         workspace.add(middle, weight=1)
         for section_id, title, fields in (
-            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type")),
+            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type", "Lifecycle state", "Lifecycle evidence", "Lifecycle reason")),
             ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Contributors", "Metadata status", "Cached fields", "Missing fields")),
             ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
         ):

@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.library import album_archive_operation_target
+from audio_division.lifecycle_state import (
+    STATE_ARCHIVED,
+    STATE_DOWNLOADED,
+    STATE_READY_FOR_PROCESSING,
+    STATE_VALIDATED,
+)
 
 
 MAINTENANCE_CATEGORIES = (
@@ -31,6 +37,7 @@ def maintenance_counts(albums: list[dict[str, Any]]) -> dict[str, Any]:
     artists.discard("")
     validation_present = sum(1 for album in albums if _status(album, "validation") == "Present")
     documentation_present = sum(1 for album in albums if _documentation_present(album))
+    lifecycle_counts = Counter(_pipeline_state(album) for album in albums)
     warnings = maintenance_warnings(albums)
     return {
         "albums": total,
@@ -38,6 +45,10 @@ def maintenance_counts(albums: list[dict[str, Any]]) -> dict[str, Any]:
         "warnings": len(warnings),
         "validation_coverage": _percent(validation_present, total),
         "documentation_coverage": _percent(documentation_present, total),
+        "downloaded": lifecycle_counts.get(STATE_DOWNLOADED, 0),
+        "validated": lifecycle_counts.get(STATE_VALIDATED, 0),
+        "ready_for_processing": lifecycle_counts.get(STATE_READY_FOR_PROCESSING, 0),
+        "archived": lifecycle_counts.get(STATE_ARCHIVED, 0),
     }
 
 
@@ -179,6 +190,10 @@ def _status(album: dict[str, Any], field: str) -> str:
 
 def _documentation_present(album: dict[str, Any]) -> bool:
     return _status(album, "nfo") == "Present" and _status(album, "sfv") == "Present"
+
+
+def _pipeline_state(album: dict[str, Any]) -> str:
+    return str(album.get("pipeline_state", {}).get("state") or "UNKNOWN")
 
 
 def _has_album_category(path: Path) -> bool:

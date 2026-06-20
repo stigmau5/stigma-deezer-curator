@@ -4,8 +4,7 @@ from pathlib import Path
 
 from audio_division.closed_loop_monitor import (
     STATE_DOWNLOADED,
-    STATE_NEEDS_PROCESSING,
-    STATE_PROCESSING,
+    STATE_READY_FOR_PROCESSING,
     archived_folder_keys,
     closed_loop_summary,
     discover_incoming_albums,
@@ -45,10 +44,10 @@ class ClosedLoopMonitorTests(unittest.TestCase):
             self.assertEqual(incoming_state(folder, {"albums": {}}), STATE_DOWNLOADED)
 
             (folder / "01-track.flac").write_text("audio", encoding="utf-8")
-            self.assertEqual(incoming_state(folder, {"albums": {}}), STATE_NEEDS_PROCESSING)
+            self.assertEqual(incoming_state(folder, {"albums": {}}), STATE_DOWNLOADED)
 
-            queue = {"albums": {str(folder): {"state": "PROCESSING"}}}
-            self.assertEqual(incoming_state(folder, queue), STATE_PROCESSING)
+            (folder / "STIGMA_VALIDATED.txt").write_text("ok", encoding="utf-8")
+            self.assertEqual(incoming_state(folder, {"albums": {}}), STATE_READY_FOR_PROCESSING)
 
     def test_archived_folder_keys_normalize_names(self):
         keys = archived_folder_keys(
@@ -61,7 +60,7 @@ class ClosedLoopMonitorTests(unittest.TestCase):
     def test_summary_and_queue_payload(self):
         rows = [
             {"source": "Deezer", "state": STATE_DOWNLOADED, "artist": "A", "album": "One", "folder": "/in/one"},
-            {"source": "Manual Import", "state": STATE_PROCESSING, "artist": "B", "album": "Two", "folder": "/in/two"},
+            {"source": "Manual Import", "state": STATE_READY_FOR_PROCESSING, "artist": "B", "album": "Two", "folder": "/in/two"},
         ]
 
         summary = closed_loop_summary(rows)
@@ -69,7 +68,7 @@ class ClosedLoopMonitorTests(unittest.TestCase):
 
         self.assertEqual(summary["incoming_albums"], 2)
         self.assertEqual(summary["sources"], 2)
-        self.assertEqual(summary["states"][STATE_PROCESSING], 1)
+        self.assertEqual(summary["states"][STATE_READY_FOR_PROCESSING], 1)
         self.assertEqual(payload["archive_path"], "/in/one")
         self.assertEqual(payload["title"], "One")
 
