@@ -79,6 +79,29 @@ class OperationRunnerTests(unittest.TestCase):
         self.assertEqual(result["message"], "album ok")
         self.assertEqual(history["history"][0]["target"], str(album))
 
+    def test_revalidate_uses_validator_tool_and_records_distinct_operation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp) / "Artist - Album"
+            album.mkdir()
+            history_path = Path(tmp) / "operation_history.json"
+
+            def runner(command, capture_output, text, timeout):
+                self.assertEqual(command, ["/bin/echo", str(album)])
+                return subprocess.CompletedProcess(command, 0, stdout="validated again", stderr="")
+
+            result = run_operation(
+                "revalidate_album",
+                str(album),
+                {"tools": {"flac_validator_path": "/bin/echo"}},
+                history_path,
+                runner=runner,
+            )
+            history = load_operation_history(history_path)
+
+        self.assertEqual(result["result"], "success")
+        self.assertEqual(result["operation"], "revalidate_album")
+        self.assertEqual(history["history"][0]["operation"], "revalidate_album")
+
     def test_failure_handling_records_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             history_path = Path(tmp) / "operation_history.json"

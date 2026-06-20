@@ -34,6 +34,15 @@ def default_operations() -> dict[str, OperationDefinition]:
             action_type="missing_validation",
         ),
         OperationDefinition(
+            id="revalidate_album",
+            title="Revalidate Album",
+            description="Prepare a repeat validation request for an archive album folder.",
+            required_inputs=("album_folder",),
+            capability="validate_album",
+            risk_level="read_only_external_tool",
+            action_type="missing_validation",
+        ),
+        OperationDefinition(
             id="generate_nfo",
             title="Generate NFO",
             description="Prepare an NFO generation request for a validated album.",

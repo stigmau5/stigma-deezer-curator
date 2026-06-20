@@ -8,12 +8,17 @@ from audio_division.album_presentation import album_presentation
 from audio_division.archive_registry import AUDIO_SUFFIXES
 from audio_division.cover_widget import album_cover_info
 from audio_division.playback import playback_summary
+from audio_division.relationships import album_relationships, render_relationships
 
 PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
 NFO_READ_LIMIT = 20000
 
 
-def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def album_workspace(
+    details: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+    collection_albums: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     presentation = album_presentation(details)
     archive_path = Path(details.get("archive_path", "")) if details.get("archive_path") else None
     cover = cover_info(details, archive_path)
@@ -21,6 +26,7 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
     tracklist = tracklist_info(archive_path, details, metadata or {})
     files = filesystem_listing(archive_path)
     integrity = album_integrity(details)
+    relationships = album_relationships(details, collection_albums or [])
     status = details.get("album_status", {})
     readiness = details.get("archive_readiness", {})
     return {
@@ -31,6 +37,8 @@ def album_workspace(details: dict[str, Any], metadata: dict[str, Any] | None = N
         "tracklist": tracklist,
         "files": files,
         "integrity": integrity,
+        "relationships": relationships,
+        "relationships_text": render_relationships(relationships),
         "playback": playback_summary(details),
     }
 

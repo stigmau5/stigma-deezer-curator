@@ -10,7 +10,7 @@ from audio_division.operations import default_operations
 from curator.atomic import atomic_write_text
 
 HISTORY_SCHEMA = 1
-SUPPORTED_EXECUTION_OPERATIONS = {"generate_nfo", "generate_sfv", "validate_album", "open_album_folder"}
+SUPPORTED_EXECUTION_OPERATIONS = {"generate_nfo", "generate_sfv", "validate_album", "revalidate_album", "open_album_folder"}
 
 
 def load_operation_history(path: Path) -> dict[str, Any]:
@@ -97,6 +97,7 @@ def _tool_path(operation_id: str, settings: dict[str, Any]) -> str:
         "generate_nfo": "nfo_generator_path",
         "generate_sfv": "sfv_generator_path",
         "validate_album": "flac_validator_path",
+        "revalidate_album": "flac_validator_path",
     }
     return str(tools.get(keys.get(operation_id, ""), "")).strip()
 

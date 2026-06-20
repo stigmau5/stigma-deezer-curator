@@ -18,6 +18,8 @@ class ToolIntegrationTests(unittest.TestCase):
     def test_operation_registration(self):
         operations = default_operations()
         self.assertIn("validate_album", operations)
+        self.assertIn("revalidate_album", operations)
+        self.assertEqual(operations["revalidate_album"].capability, "validate_album")
         self.assertEqual(operations["generate_nfo"].capability, "generate_nfo")
         self.assertEqual(operations["generate_sfv"].action_type, "missing_sfv")
 
@@ -73,7 +75,7 @@ class ToolIntegrationTests(unittest.TestCase):
             {"summary": {"confidence_counts": {}}, "unresolved": []},
             {"summary": {"albums_with_metadata": 0}, "albums": {}},
         )
-        self.assertEqual(summary["archive_operations"]["operation_count"], 5)
+        self.assertEqual(summary["archive_operations"]["operation_count"], 6)
         self.assertEqual(summary["archive_operations"]["validate_album"], 1)
 
 

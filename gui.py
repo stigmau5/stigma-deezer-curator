@@ -455,7 +455,7 @@ class DeezerCuratorGUI(tk.Tk):
         operations.pack(fill="x", pady=(8, 0))
         buttons = ttk.Frame(operations)
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Validate Album", command=lambda: self.run_library_album_operation("validate_album")).pack(side="left")
+        ttk.Button(buttons, text="Revalidate", command=lambda: self.run_library_album_operation("revalidate_album")).pack(side="left")
         ttk.Button(buttons, text="Generate NFO", command=lambda: self.run_library_album_operation("generate_nfo")).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Generate SFV", command=lambda: self.run_library_album_operation("generate_sfv")).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Open Folder", command=lambda: self.run_library_album_operation("open_album_folder")).pack(side="left", padx=(6, 0))
@@ -635,7 +635,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         operations = ttk.LabelFrame(visual, text="Operations", padding=6)
         operations.pack(fill="x")
-        ttk.Button(operations, text="Validate", command=lambda: self.run_archive_album_operation("validate_album")).grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=(0, 3))
+        ttk.Button(operations, text="Revalidate", command=lambda: self.run_archive_album_operation("revalidate_album")).grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=(0, 3))
         ttk.Button(operations, text="NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).grid(row=0, column=1, sticky="ew", pady=(0, 3))
         ttk.Button(operations, text="SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).grid(row=1, column=0, sticky="ew", padx=(0, 3))
         ttk.Button(operations, text="Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=1, column=1, sticky="ew")
@@ -675,6 +675,12 @@ class DeezerCuratorGUI(tk.Tk):
                     self.archive_path_tooltip = Tooltip(value)
         for hidden_field in ("Cached fields", "Missing fields"):
             self.archive_presentation_labels[("metadata", hidden_field)] = ttk.Label(details)
+        related = ttk.LabelFrame(details, text="Related Albums", padding=6)
+        related.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(0, 6))
+        details.rowconfigure(2, weight=1)
+        self.archive_relationships_text = tk.Text(related, height=7, wrap="word", font="TkFixedFont")
+        self.archive_relationships_text.pack(fill="both", expand=True)
+        self.archive_relationships_text.config(state="disabled")
 
         evidence = ttk.Panedwindow(workspace, orient="horizontal")
         workspace.add(evidence, weight=5)
@@ -741,6 +747,11 @@ class DeezerCuratorGUI(tk.Tk):
                 value.grid(row=row, column=1, sticky="ew", pady=1)
                 frame.columnconfigure(1, weight=1)
                 self.library_presentation_labels[(section_id, field)] = value
+        related_frame = ttk.LabelFrame(middle, text="Related Albums", padding=6)
+        middle.add(related_frame, weight=1)
+        self.library_relationships_text = tk.Text(related_frame, height=10, wrap="word", font="TkFixedFont")
+        self.library_relationships_text.pack(fill="both", expand=True)
+        self.library_relationships_text.config(state="disabled")
 
         evidence = ttk.Panedwindow(workspace, orient="horizontal")
         workspace.add(evidence, weight=4)
@@ -1335,7 +1346,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_archive_detail(self.archive_selected_album)
 
     def set_archive_detail(self, details: dict):
-        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"))
+        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"), getattr(self, "archive_albums", []))
         presentation = workspace.get("presentation", {})
         sections = presentation.get("sections", {})
         for (section_id, field), label in self.archive_presentation_labels.items():
@@ -1356,6 +1367,7 @@ class DeezerCuratorGUI(tk.Tk):
                 self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_archive_thumbnail(workspace.get("cover", {}))
         self._set_text_widget(self.archive_integrity_text, self._format_integrity(workspace.get("integrity", {})))
+        self._set_text_widget(self.archive_relationships_text, workspace.get("relationships_text", ""))
         files = workspace.get("files", {})
         self._set_text_widget(
             self.archive_files_text,
@@ -1658,7 +1670,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_library_detail(self.library_selected_album)
 
     def set_library_detail(self, details: dict):
-        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"))
+        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"), getattr(self, "library_data", {}).get("albums", []))
         presentation = workspace.get("presentation", {})
         sections = presentation.get("sections", {})
         for (section_id, field), label in self.library_presentation_labels.items():
@@ -1673,6 +1685,7 @@ class DeezerCuratorGUI(tk.Tk):
                 self.library_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_library_thumbnail(workspace.get("cover", {}))
         self._set_text_widget(self.library_integrity_text, self._format_integrity(workspace.get("integrity", {})))
+        self._set_text_widget(self.library_relationships_text, workspace.get("relationships_text", ""))
         files = workspace.get("files", {})
         self._set_text_widget(
             self.library_files_text,
@@ -1846,6 +1859,8 @@ class DeezerCuratorGUI(tk.Tk):
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
         self.library_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
         self.refresh_library()
+        if hasattr(self, "archive_tree"):
+            self.refresh_archive_browser()
         if album_id:
             self.library_selected_album = album_details(self.library_data, album_id)
             self.set_library_detail(self.library_selected_album)

@@ -108,7 +108,26 @@ class AlbumWorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace["tracklist"]["source"], "filesystem")
         self.assertEqual(workspace["files"]["source"], "filesystem")
         self.assertIn("integrity", workspace)
+        self.assertIn("relationships", workspace)
         self.assertIn(("Readiness", "ARCHIVE_READY"), workspace["status_glance"])
+
+    def test_album_workspace_includes_related_albums(self):
+        details = self.details()
+        details["label"] = "Virgin"
+        details["genres"] = ["Electronic"]
+        related = {
+            "album_id": "999",
+            "artist": "Daft Punk",
+            "title": "Homework",
+            "year": "1997",
+            "label": "Virgin",
+            "genres": ["Electronic"],
+        }
+
+        workspace = album_workspace(details, collection_albums=[details, related])
+
+        self.assertEqual(workspace["relationships"]["groups"]["same_artist"][0]["title"], "Homework")
+        self.assertIn("Same Artist: 1", workspace["relationships_text"])
 
     def test_cover_info_prefers_named_album_artwork(self):
         with tempfile.TemporaryDirectory() as tmp:
