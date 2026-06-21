@@ -23,100 +23,53 @@ def generate_archive_actions(
     lifecycle: dict[str, Any],
     identity: dict[str, Any],
     metadata: dict[str, Any],
+    albums: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    actions: list[dict[str, Any]] = []
-    metadata_albums = metadata.get("albums", {})
+    if albums is None:
+        from audio_division.library import build_library
 
-    for row in lifecycle.get("albums", []):
-        album_id = str(row.get("album_id"))
-        states = row.get("states", {})
-        artist = row.get("artist")
-        title = row.get("title")
+        albums = build_library(lifecycle, identity, metadata).get("albums", [])
+    return _actions_from_maintenance(albums)
 
-        if states.get("shipped") and not states.get("validated"):
+
+def _actions_from_maintenance(albums: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from audio_division.maintenance import (
+        CATEGORY_NEEDS_DOCUMENTATION,
+        CATEGORY_NEEDS_METADATA,
+        CATEGORY_NEEDS_REVIEW,
+        CATEGORY_NEEDS_VALIDATION,
+        CATEGORY_WARNINGS,
+        maintenance_records,
+    )
+
+    actions = []
+    for album in maintenance_records(albums):
+        category = album["maintenance_category"]
+        truth_items = album.get("album_truth", {}).get("items", {})
+        priority = album["maintenance_priority"].lower()
+        if priority == "info":
+            continue
+        categories = []
+        if category == CATEGORY_NEEDS_VALIDATION:
+            categories = ["missing_validation"]
+        elif category == CATEGORY_NEEDS_DOCUMENTATION:
+            categories = [name for field, name in (("nfo", "missing_nfo"), ("sfv", "missing_sfv")) if truth_items.get(field) != "Present"]
+        elif category == CATEGORY_NEEDS_METADATA:
+            categories = ["missing_metadata"]
+        elif category in {CATEGORY_NEEDS_REVIEW, CATEGORY_WARNINGS}:
+            categories = ["missing_artwork"] if truth_items.get("artwork") != "Present" else ["identity_review"]
+        for action_category in categories:
             actions.append(
                 _action(
-                    "missing_validation",
-                    album_id,
-                    artist,
-                    title,
-                    "high",
-                    "Album was shipped but has no validation evidence.",
-                    ["shipped_not_validated"],
+                    action_category,
+                    album.get("album_id"),
+                    album.get("artist"),
+                    album.get("title") or album.get("album"),
+                    priority,
+                    album["maintenance_reason"],
+                    [f"maintenance:{category}"],
                 )
             )
-
-        if states.get("validated"):
-            actions.append(
-                _action(
-                    "missing_nfo",
-                    album_id,
-                    artist,
-                    title,
-                    "medium",
-                    "Album is validated but has no tracked NFO evidence.",
-                    ["validated_album", "nfo_tracking_not_integrated"],
-                )
-            )
-            actions.append(
-                _action(
-                    "missing_sfv",
-                    album_id,
-                    artist,
-                    title,
-                    "low",
-                    "Album is validated but has no tracked SFV evidence.",
-                    ["validated_album", "sfv_tracking_not_integrated"],
-                )
-            )
-
-        if album_id and album_id not in metadata_albums:
-            actions.append(
-                _action(
-                    "missing_metadata",
-                    album_id,
-                    artist,
-                    title,
-                    "medium",
-                    "Album is present in lifecycle registry but missing metadata cache entry.",
-                    ["metadata_cache_miss"],
-                )
-            )
-        elif album_id:
-            album_meta = metadata_albums.get(album_id, {})
-            covers = album_meta.get("covers", {}) if isinstance(album_meta, dict) else {}
-            if not any(covers.values()):
-                actions.append(
-                    _action(
-                        "missing_artwork",
-                        album_id,
-                        artist,
-                        title,
-                        "low",
-                        "Album metadata is cached but has no cover URLs.",
-                        ["metadata_cached", "missing_cover_urls"],
-                    )
-                )
-
-    for item in identity.get("unresolved", []):
-        best = (item.get("candidates") or [{}])[0]
-        actions.append(
-            _action(
-                "identity_review",
-                best.get("deezer_album_id"),
-                best.get("artist") or item.get("parsed_folder", {}).get("artist"),
-                best.get("title") or item.get("parsed_folder", {}).get("title"),
-                "high" if item.get("candidates") else "medium",
-                "Validator evidence could not be confidently linked to a lifecycle album.",
-                [item.get("reason", "unresolved_identity")],
-                extra={
-                    "folder": item.get("folder"),
-                    "path": item.get("path"),
-                    "candidate_count": len(item.get("candidates", [])),
-                },
-            )
-        )
-
     return sorted(actions, key=lambda item: (PRIORITY_ORDER[item["priority"]], item["type"], item.get("title") or ""))
 
 

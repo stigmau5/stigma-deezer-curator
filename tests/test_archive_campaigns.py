@@ -9,6 +9,7 @@ from audio_division.campaigns import (
 
 class ArchiveCampaignTests(unittest.TestCase):
     def album(self, album_id: str, **items):
+        metadata_status = items.pop("metadata_status", "CACHED")
         defaults = {
             "validation": "Present",
             "nfo": "Present",
@@ -17,14 +18,29 @@ class ArchiveCampaignTests(unittest.TestCase):
             "metadata": "Present",
         }
         defaults.update(items)
+        if defaults["validation"] != "Present":
+            readiness = "NEEDS_VALIDATION"
+        elif defaults["nfo"] != "Present" or defaults["sfv"] != "Present":
+            readiness = "NEEDS_DOCUMENTATION"
+        elif metadata_status != "CACHED":
+            readiness = "ARCHIVE_READY"
+        elif defaults["artwork"] != "Present":
+            readiness = "NEEDS_REVIEW"
+        else:
+            readiness = "ARCHIVE_READY"
         return {
             "album_id": album_id,
             "artist": "Artist",
             "title": f"Album {album_id}",
             "archive_path": f"/archive/Album-{album_id}",
             "album_status": {"items": defaults},
-            "album_truth": {"items": defaults},
-            "metadata_status": "CACHED",
+            "album_truth": {
+                "items": defaults,
+                "readiness": readiness,
+                "metadata_status": metadata_status,
+                "identity_confidence": "HIGH",
+            },
+            "metadata_status": metadata_status,
         }
 
     def test_campaign_summaries(self):
@@ -42,7 +58,7 @@ class ArchiveCampaignTests(unittest.TestCase):
     def test_campaign_album_matching(self):
         albums = [
             self.album("1", artwork="Missing"),
-            {**self.album("2"), "metadata_status": "AVAILABLE_NOT_CACHED"},
+            self.album("2", metadata_status="AVAILABLE_NOT_CACHED"),
         ]
 
         self.assertEqual(campaign_albums(albums, "missing_artwork")[0]["album_id"], "1")

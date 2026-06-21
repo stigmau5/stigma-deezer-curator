@@ -35,6 +35,20 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                             "metadata": "Present",
                         },
                     },
+                    "album_truth": {
+                        "items": {
+                            "validation": "Present",
+                            "nfo": "Missing",
+                            "sfv": "Missing",
+                            "playlist": "Missing",
+                            "artwork": "Present",
+                            "metadata": "Present",
+                        },
+                        "readiness": "NEEDS_DOCUMENTATION",
+                        "metadata_status": "CACHED",
+                        "identity_confidence": "HIGH",
+                    },
+                    "metadata_status": "CACHED",
                     "archive_readiness": {"state": "NEEDS_DOCUMENTATION"},
                 },
                 {
@@ -54,6 +68,20 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                             "metadata": "Missing",
                         },
                     },
+                    "album_truth": {
+                        "items": {
+                            "validation": "Missing",
+                            "nfo": "Unknown",
+                            "sfv": "Unknown",
+                            "playlist": "Unknown",
+                            "artwork": "Missing",
+                            "metadata": "Missing",
+                        },
+                        "readiness": "UNKNOWN",
+                        "metadata_status": "MISSING",
+                        "identity_confidence": "UNKNOWN",
+                    },
+                    "metadata_status": "MISSING",
                     "archive_readiness": {"state": "UNKNOWN"},
                 },
             ]
@@ -64,14 +92,14 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
         categories = [item["category"] for item in opportunities]
         self.assertIn("missing_nfo", categories)
         self.assertIn("missing_validation", categories)
-        self.assertIn("identity_review", categories)
+        self.assertNotIn("identity_review", categories)
         nfo = next(item for item in opportunities if item["category"] == "missing_nfo")
-        self.assertEqual(nfo["priority"], "HIGH")
+        self.assertEqual(nfo["priority"], "MEDIUM")
         self.assertEqual(nfo["recommended_action"], "Generate NFO")
 
     def test_filtering(self):
         opportunities = generate_opportunities(self.sample_library())
-        filtered = filter_opportunities(opportunities, category="missing_metadata", artist="beta")
+        filtered = filter_opportunities(opportunities, category="missing_validation", artist="beta")
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["album_id"], "2")
 
@@ -104,6 +132,12 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                     "lifecycle_state": "VALIDATED",
                     "identity_confidence": "HIGH",
                     "metadata_status": "CACHED",
+                    "album_truth": {
+                        "items": {"validation": "Present", "nfo": "Present", "sfv": "Present"},
+                        "readiness": "ARCHIVE_READY",
+                        "metadata_status": "CACHED",
+                        "identity_confidence": "HIGH",
+                    },
                     "archive_readiness": {"state": "ARCHIVE_READY", "reason": "Ready"},
                 },
                 {
@@ -113,6 +147,12 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                     "lifecycle_state": "SHIPPED",
                     "identity_confidence": "HIGH",
                     "metadata_status": "CACHED",
+                    "album_truth": {
+                        "items": {"validation": "Missing", "nfo": "Present", "sfv": "Present"},
+                        "readiness": "NEEDS_VALIDATION",
+                        "metadata_status": "CACHED",
+                        "identity_confidence": "HIGH",
+                    },
                     "archive_readiness": {"state": "NEEDS_VALIDATION", "reason": "Validation missing"},
                 },
                 {
@@ -122,6 +162,12 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                     "lifecycle_state": "VALIDATED",
                     "identity_confidence": "HIGH",
                     "metadata_status": "CACHED",
+                    "album_truth": {
+                        "items": {"validation": "Present", "nfo": "Missing", "sfv": "Present"},
+                        "readiness": "NEEDS_DOCUMENTATION",
+                        "metadata_status": "CACHED",
+                        "identity_confidence": "HIGH",
+                    },
                     "archive_readiness": {"state": "NEEDS_DOCUMENTATION", "reason": "Docs missing"},
                 },
                 {
@@ -132,6 +178,12 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                     "identity_confidence": "HIGH",
                     "metadata_status": "AVAILABLE_NOT_CACHED",
                     "metadata_detail": {"state": "AVAILABLE_NOT_CACHED", "reason": "Not imported"},
+                    "album_truth": {
+                        "items": {"validation": "Present", "nfo": "Present", "sfv": "Present"},
+                        "readiness": "ARCHIVE_READY",
+                        "metadata_status": "AVAILABLE_NOT_CACHED",
+                        "identity_confidence": "HIGH",
+                    },
                     "archive_readiness": {"state": "OTHER", "reason": ""},
                 },
                 {
@@ -140,8 +192,14 @@ class ArchiveOpportunitiesTests(unittest.TestCase):
                     "title": "Review",
                     "lifecycle_state": "DISCOVERED",
                     "identity_confidence": "UNKNOWN",
-                    "metadata_status": "AVAILABLE_NOT_CACHED",
-                    "archive_readiness": {"state": "UNKNOWN", "reason": "Path unknown"},
+                    "metadata_status": "CACHED",
+                    "album_truth": {
+                        "items": {"validation": "Present", "nfo": "Present", "sfv": "Present"},
+                        "readiness": "NEEDS_REVIEW",
+                        "metadata_status": "CACHED",
+                        "identity_confidence": "UNKNOWN",
+                    },
+                    "archive_readiness": {"state": "NEEDS_REVIEW", "reason": "Path unknown"},
                 },
             ]
         }

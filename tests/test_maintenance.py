@@ -5,7 +5,10 @@ from audio_division.maintenance import (
     grouped_warnings,
     maintenance_action_target,
     maintenance_albums,
+    maintenance_category,
     maintenance_counts,
+    maintenance_operation_for_album,
+    maintenance_records,
     maintenance_summaries,
 )
 
@@ -14,7 +17,7 @@ def album(
     album_id: str,
     *,
     artist: str = "Artist",
-    title: str = "Album",
+    title: str | None = None,
     path: str = "/archive/A/Artist/Albums/Artist-album-2024-WEB-FLAC-STiGMA",
     validation: str = "Present",
     nfo: str = "Present",
@@ -35,10 +38,15 @@ def album(
         "album_id": album_id,
         "artist": artist,
         "artist_key": artist.lower(),
-        "title": title,
+        "title": title or f"Album {album_id}",
         "archive_path": path,
         "metadata_status": metadata,
-        "album_truth": {"items": items, "readiness": readiness, "metadata_status": metadata},
+        "album_truth": {
+            "items": items,
+            "readiness": readiness,
+            "metadata_status": metadata,
+            "identity_confidence": "HIGH",
+        },
         "album_status": {"items": items},
         "pipeline_state": {"state": pipeline_state, "evidence": ["test"], "reason": "test", "confidence": "HIGH"},
     }
@@ -72,10 +80,28 @@ class MaintenanceTests(unittest.TestCase):
 
         summaries = {row["id"]: row["album_count"] for row in maintenance_summaries(albums)}
 
-        self.assertEqual(summaries["archive_ready"], 1)
+        self.assertEqual(summaries["ready"], 1)
         self.assertEqual(summaries["needs_validation"], 1)
         self.assertEqual(summaries["needs_documentation"], 1)
         self.assertEqual(summaries["needs_metadata"], 1)
+        self.assertEqual(sum(summaries.values()), len(albums))
+
+    def test_category_assignment_uses_albumtruth_precedence(self):
+        albums = [
+            album("1", validation="Missing", nfo="Missing", metadata="UNKNOWN", readiness="UNKNOWN"),
+            album("2", nfo="Missing", metadata="UNKNOWN", readiness="NEEDS_DOCUMENTATION"),
+            album("3", metadata="AVAILABLE_NOT_CACHED", readiness="NEEDS_REVIEW"),
+            album("4", readiness="NEEDS_REVIEW"),
+            album("5"),
+        ]
+
+        categories = [maintenance_category(item) for item in albums]
+
+        self.assertEqual(
+            categories,
+            ["needs_validation", "needs_documentation", "needs_metadata", "needs_review", "ready"],
+        )
+        self.assertEqual(len(maintenance_records(albums)), len(albums))
 
     def test_warning_grouping_detects_disc_rows_and_duplicates(self):
         albums = [
@@ -84,8 +110,8 @@ class MaintenanceTests(unittest.TestCase):
             album(
                 "3",
                 path="/archive/A/Artist/Albums/Artist-box-2024-WEB-FLAC-STiGMA/CD1",
-                metadata="UNKNOWN",
-                readiness="UNKNOWN",
+                metadata="CACHED",
+                readiness="ARCHIVE_READY",
             ),
         ]
 
@@ -93,7 +119,6 @@ class MaintenanceTests(unittest.TestCase):
 
         self.assertEqual(grouped["duplicate_album"], 2)
         self.assertEqual(grouped["unexpected_structure"], 1)
-        self.assertEqual(grouped["missing_metadata"], 1)
         self.assertEqual(len(maintenance_albums(albums, "warnings")), 3)
 
     def test_documentation_operation_routes_to_missing_artifact(self):
@@ -106,6 +131,18 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(operation, "generate_nfo")
         self.assertTrue(target.endswith("Artist-album-2024-WEB-FLAC-STiGMA"))
         self.assertEqual(reason, "ok")
+
+    def test_album_routing_uses_primary_maintenance_category(self):
+        self.assertEqual(maintenance_operation_for_album(album("1", validation="Missing")), "validate_album")
+        self.assertEqual(maintenance_operation_for_album(album("2", nfo="Missing")), "generate_documentation")
+        self.assertEqual(
+            maintenance_operation_for_album(album("3", metadata="AVAILABLE_NOT_CACHED")),
+            "refresh_metadata",
+        )
+        self.assertEqual(maintenance_operation_for_album(album("4")), "open_album_folder")
+
+        operation, target, reason = maintenance_action_target("", album("3", metadata="AVAILABLE_NOT_CACHED"))
+        self.assertEqual((operation, target, reason), ("refresh_metadata", "3", "ok"))
 
 
 if __name__ == "__main__":

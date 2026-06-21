@@ -84,6 +84,19 @@ class AlbumTruthTests(unittest.TestCase):
         self.assertEqual(truth.validation_confidence, "NONE")
         self.assertEqual(truth.validation_reason, "No validation evidence found.")
 
+    def test_albumtruth_exposes_primary_maintenance_state(self):
+        truth = album_truth(
+            validator_evidence={"validation": True},
+            metadata_state="CACHED",
+            identity_confidence="HIGH",
+        )
+
+        maintenance = truth.to_dict()["maintenance"]
+
+        self.assertEqual(maintenance["category"], "needs_documentation")
+        self.assertEqual(maintenance["priority"], "MEDIUM")
+        self.assertEqual(maintenance["operation"], "generate_documentation")
+
     def test_validator_evidence_wins_when_filesystem_is_unavailable(self):
         truth = album_truth(
             registry_artifacts={"validation_log": False},
@@ -143,6 +156,8 @@ class AlbumTruthTests(unittest.TestCase):
         self.assertEqual(truth.readiness, "ARCHIVE_READY")
         self.assertEqual(truth.processing_state, "ARCHIVED")
         self.assertEqual(truth.to_dict()["validation_present"], True)
+        self.assertEqual(truth.to_dict()["maintenance"]["category"], "ready")
+        self.assertEqual(truth.to_dict()["maintenance"]["operation"], "open_album_folder")
 
     def test_selection_preservation_helpers(self):
         selected = {

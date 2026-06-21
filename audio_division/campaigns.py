@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from audio_division.library import album_archive_operation_target
+from audio_division.maintenance import (
+    CATEGORY_NEEDS_DOCUMENTATION,
+    CATEGORY_NEEDS_METADATA,
+    CATEGORY_NEEDS_REVIEW,
+    CATEGORY_NEEDS_VALIDATION,
+    maintenance_category,
+)
 
 
 CAMPAIGNS = (
@@ -33,17 +40,21 @@ def campaign_albums(albums: list[dict[str, Any]], campaign_id: str) -> list[dict
 
 def album_matches_campaign(album: dict[str, Any], campaign_id: str) -> bool:
     truth = album.get("album_truth", {})
-    items = truth.get("items") or album.get("album_status", {}).get("items", {})
+    items = truth.get("items", {})
+    category = maintenance_category(album)
     if campaign_id == "missing_nfo":
-        return items.get("nfo") == "Missing"
+        return category == CATEGORY_NEEDS_DOCUMENTATION and items.get("nfo") != "Present"
     if campaign_id == "missing_sfv":
-        return items.get("sfv") == "Missing"
+        return category == CATEGORY_NEEDS_DOCUMENTATION and items.get("sfv") != "Present"
     if campaign_id == "missing_validation":
-        return items.get("validation") == "Missing"
+        return category == CATEGORY_NEEDS_VALIDATION
     if campaign_id == "missing_artwork":
-        return items.get("artwork") == "Missing"
+        return category == CATEGORY_NEEDS_REVIEW and items.get("artwork") != "Present"
     if campaign_id == "metadata_available_not_cached":
-        return album.get("metadata_status") == "AVAILABLE_NOT_CACHED" or truth.get("metadata_status") == "AVAILABLE_NOT_CACHED"
+        return category == CATEGORY_NEEDS_METADATA and (
+            truth.get("metadata_status") == "AVAILABLE_NOT_CACHED"
+            or album.get("metadata_status") == "AVAILABLE_NOT_CACHED"
+        )
     return False
 
 

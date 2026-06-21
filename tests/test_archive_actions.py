@@ -40,9 +40,7 @@ class ArchiveActionsTests(unittest.TestCase):
         self.assertIn("missing_nfo", categories)
         self.assertIn("missing_sfv", categories)
         self.assertIn("missing_validation", categories)
-        self.assertIn("missing_metadata", categories)
-        self.assertIn("missing_artwork", categories)
-        self.assertIn("identity_review", categories)
+        self.assertEqual(categories, {"missing_nfo", "missing_sfv", "missing_validation"})
         self.assertEqual(actions[0]["priority"], "high")
 
     def test_action_grouping(self):
@@ -75,6 +73,40 @@ class ArchiveActionsTests(unittest.TestCase):
         )
         self.assertGreater(summary["archive_actions"]["action_count"], 0)
         self.assertEqual(summary["archive_actions"]["missing_nfo"], 1)
+
+    def test_dashboard_actions_delegate_to_maintenance_when_albumtruth_is_available(self):
+        album = {
+            "album_id": "1",
+            "artist": "Artist",
+            "title": "Album",
+            "archive_path": "/archive/Album",
+            "metadata_status": "CACHED",
+            "identity_confidence": "HIGH",
+            "album_truth": {
+                "items": {
+                    "validation": "Present",
+                    "nfo": "Missing",
+                    "sfv": "Present",
+                    "metadata": "Present",
+                },
+                "readiness": "NEEDS_DOCUMENTATION",
+                "metadata_status": "CACHED",
+                "identity_confidence": "HIGH",
+            },
+            "pipeline_state": {"state": "ARCHIVED"},
+        }
+
+        summary = compute_dashboard_summary(
+            {"summary": {"total_albums": 1, "state_evidence_counts": {"VALIDATED": 1}}},
+            {"summary": {"confidence_counts": {}}},
+            {"summary": {}, "albums": {}},
+            maintenance_albums=[album],
+        )
+
+        self.assertEqual(summary["maintenance"]["categories"]["needs_documentation"], 1)
+        self.assertEqual(summary["top_opportunities"]["needs_documentation"], 1)
+        self.assertEqual(summary["archive_actions"]["missing_nfo"], 1)
+        self.assertEqual(summary["archive_actions"]["missing_sfv"], 0)
 
     def test_report_generation(self):
         report = render_archive_actions_report(

@@ -29,6 +29,40 @@ PRESENT = "Present"
 MISSING = "Missing"
 UNKNOWN = "Unknown"
 
+MAINTENANCE_NEEDS_VALIDATION = "needs_validation"
+MAINTENANCE_NEEDS_DOCUMENTATION = "needs_documentation"
+MAINTENANCE_NEEDS_METADATA = "needs_metadata"
+MAINTENANCE_NEEDS_REVIEW = "needs_review"
+MAINTENANCE_WARNINGS = "warnings"
+MAINTENANCE_READY = "ready"
+
+MAINTENANCE_LABELS = {
+    MAINTENANCE_NEEDS_VALIDATION: "Needs Validation",
+    MAINTENANCE_NEEDS_DOCUMENTATION: "Needs Documentation",
+    MAINTENANCE_NEEDS_METADATA: "Needs Metadata",
+    MAINTENANCE_NEEDS_REVIEW: "Needs Review",
+    MAINTENANCE_WARNINGS: "Warnings",
+    MAINTENANCE_READY: "Ready",
+}
+
+MAINTENANCE_PRIORITIES = {
+    MAINTENANCE_NEEDS_VALIDATION: "HIGH",
+    MAINTENANCE_NEEDS_DOCUMENTATION: "MEDIUM",
+    MAINTENANCE_NEEDS_METADATA: "LOW",
+    MAINTENANCE_NEEDS_REVIEW: "HIGH",
+    MAINTENANCE_WARNINGS: "HIGH",
+    MAINTENANCE_READY: "INFO",
+}
+
+MAINTENANCE_OPERATIONS = {
+    MAINTENANCE_NEEDS_VALIDATION: "validate_album",
+    MAINTENANCE_NEEDS_DOCUMENTATION: "generate_documentation",
+    MAINTENANCE_NEEDS_METADATA: "refresh_metadata",
+    MAINTENANCE_NEEDS_REVIEW: "open_album_folder",
+    MAINTENANCE_WARNINGS: "open_album_folder",
+    MAINTENANCE_READY: "open_album_folder",
+}
+
 
 @dataclass(frozen=True)
 class TruthValue:
@@ -41,6 +75,24 @@ class TruthValue:
     @property
     def present(self) -> bool:
         return self.status == PRESENT
+
+
+@dataclass(frozen=True)
+class MaintenanceValue:
+    category: str
+    label: str
+    priority: str
+    operation: str
+    reason: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "category": self.category,
+            "label": self.label,
+            "priority": self.priority,
+            "operation": self.operation,
+            "reason": self.reason,
+        }
 
 
 @dataclass(frozen=True)
@@ -82,6 +134,16 @@ class AlbumTruth:
         return self.validation.reason
 
     @property
+    def maintenance(self) -> MaintenanceValue:
+        return maintenance_value(
+            self.status_items(),
+            readiness=self.readiness,
+            metadata_status=self.metadata_status,
+            identity_confidence=self.identity_confidence,
+            validation_reason=self.validation_reason,
+        )
+
+    @property
     def nfo_present(self) -> bool:
         return self.nfo.present
 
@@ -113,6 +175,7 @@ class AlbumTruth:
             "validation_source": self.validation_source,
             "validation_confidence": self.validation_confidence,
             "validation_reason": self.validation_reason,
+            "maintenance": self.maintenance.to_dict(),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -135,12 +198,92 @@ class AlbumTruth:
             "readiness": self.readiness,
             "processing_state": self.processing_state,
             "source": self.source,
+            "maintenance": self.maintenance.to_dict(),
             "items": self.status_items(),
             "sources": {field: getattr(self, field).source for field in ARTIFACT_FIELDS},
             "confidences": {field: getattr(self, field).confidence for field in ARTIFACT_FIELDS if getattr(self, field).confidence},
             "reasons": {field: getattr(self, field).reason for field in ARTIFACT_FIELDS if getattr(self, field).reason},
             "paths": {field: getattr(self, field).path for field in ARTIFACT_FIELDS if getattr(self, field).path},
         }
+
+
+def maintenance_value(
+    items: dict[str, Any],
+    *,
+    readiness: str = UNKNOWN,
+    metadata_status: str = UNKNOWN,
+    identity_confidence: str = UNKNOWN,
+    validation_reason: str = "",
+    warning_reason: str = "",
+) -> MaintenanceValue:
+    missing_docs = [
+        label
+        for field, label in (("nfo", "NFO"), ("sfv", "SFV"))
+        if field in items and items.get(field) != PRESENT
+    ]
+    if items.get("validation") != PRESENT:
+        category = MAINTENANCE_NEEDS_VALIDATION
+        reason = validation_reason or "Validation evidence is missing."
+    elif missing_docs:
+        category = MAINTENANCE_NEEDS_DOCUMENTATION
+        reason = f"Missing documentation: {', '.join(missing_docs)}."
+    elif ("metadata" in items and items.get("metadata") != PRESENT) or metadata_status != "CACHED":
+        category = MAINTENANCE_NEEDS_METADATA
+        reason = f"Metadata status is {metadata_status or UNKNOWN}."
+    elif readiness in {"NEEDS_REVIEW", UNKNOWN} or identity_confidence not in {"HIGH", "MEDIUM"}:
+        category = MAINTENANCE_NEEDS_REVIEW
+        missing_review = [
+            label
+            for field, label in (("playlist", "playlist"), ("artwork", "artwork"))
+            if field in items and items.get(field) != PRESENT
+        ]
+        reason = (
+            f"Review incomplete {', '.join(missing_review)} evidence."
+            if missing_review
+            else "AlbumTruth requires review."
+        )
+    elif warning_reason:
+        category = MAINTENANCE_WARNINGS
+        reason = warning_reason
+    else:
+        category = MAINTENANCE_READY
+        reason = "AlbumTruth reports the album ready."
+    return MaintenanceValue(
+        category=category,
+        label=MAINTENANCE_LABELS[category],
+        priority=MAINTENANCE_PRIORITIES[category],
+        operation=MAINTENANCE_OPERATIONS[category],
+        reason=reason,
+    )
+
+
+def maintenance_value_from_album(album: dict[str, Any], warning_reason: str = "") -> MaintenanceValue:
+    truth = album.get("album_truth") if isinstance(album.get("album_truth"), dict) else {}
+    projected = truth.get("maintenance") if isinstance(truth.get("maintenance"), dict) else {}
+    category = str(projected.get("category") or "")
+    if category in MAINTENANCE_LABELS and not warning_reason:
+        return MaintenanceValue(
+            category=category,
+            label=str(projected.get("label") or MAINTENANCE_LABELS[category]),
+            priority=str(projected.get("priority") or MAINTENANCE_PRIORITIES[category]),
+            operation=str(projected.get("operation") or MAINTENANCE_OPERATIONS[category]),
+            reason=str(projected.get("reason") or ""),
+        )
+
+    legacy_status = album.get("album_status") if isinstance(album.get("album_status"), dict) else {}
+    items = truth.get("items") if isinstance(truth.get("items"), dict) else legacy_status.get("items", {})
+    readiness = truth.get("readiness") or album.get("archive_readiness", {}).get("state") or UNKNOWN
+    metadata_status = truth.get("metadata_status") or album.get("metadata_status") or UNKNOWN
+    identity_confidence = truth.get("identity_confidence") or album.get("identity_confidence") or UNKNOWN
+    validation_reason = truth.get("validation_reason") or legacy_status.get("validation_reason") or ""
+    return maintenance_value(
+        items if isinstance(items, dict) else {},
+        readiness=str(readiness),
+        metadata_status=str(metadata_status),
+        identity_confidence=str(identity_confidence),
+        validation_reason=str(validation_reason),
+        warning_reason=warning_reason,
+    )
 
 
 def album_truth(

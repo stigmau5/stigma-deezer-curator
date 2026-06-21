@@ -5,6 +5,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from audio_division.maintenance import (
+    CATEGORY_NEEDS_DOCUMENTATION,
+    CATEGORY_NEEDS_METADATA,
+    CATEGORY_NEEDS_REVIEW,
+    CATEGORY_NEEDS_VALIDATION,
+    CATEGORY_READY,
+    CATEGORY_WARNINGS,
+    maintenance_records,
+)
 from curator.atomic import atomic_write_text
 
 OPPORTUNITY_CATEGORIES = (
@@ -31,83 +40,26 @@ PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
 def generate_opportunities(library: dict[str, Any]) -> list[dict[str, Any]]:
     opportunities: list[dict[str, Any]] = []
-    for album in library.get("albums", []):
-        album_id = str(album.get("album_id", ""))
-        status = album.get("album_status", {})
-        items = status.get("items", {})
+    for album in maintenance_records(library.get("albums", [])):
+        items = album.get("album_truth", {}).get("items", {})
+        category = album["maintenance_category"]
+        priority = album["maintenance_priority"]
+        reason = album["maintenance_reason"]
 
-        _append_if(
-            opportunities,
-            items.get("validation") == "Missing",
-            "missing_validation",
-            album,
-            "HIGH",
-            "Album is known but has no validation evidence.",
-            "Validate Album",
-        )
-        _append_if(
-            opportunities,
-            album.get("validation_status") == "validated" and items.get("nfo") == "Missing",
-            "missing_nfo",
-            album,
-            "HIGH",
-            "Validated album is missing NFO documentation.",
-            "Generate NFO",
-        )
-        _append_if(
-            opportunities,
-            album.get("validation_status") == "validated" and items.get("sfv") == "Missing",
-            "missing_sfv",
-            album,
-            "MEDIUM",
-            "Validated album is missing SFV verification data.",
-            "Generate SFV",
-        )
-        _append_if(
-            opportunities,
-            items.get("playlist") == "Missing",
-            "missing_playlist",
-            album,
-            "LOW",
-            "Album folder has no playlist artifact.",
-            "Generate Playlist",
-        )
-        _append_if(
-            opportunities,
-            items.get("artwork") == "Missing",
-            "missing_artwork",
-            album,
-            "LOW",
-            "Album has no local or cached artwork evidence.",
-            "Review Artwork",
-        )
-        _append_if(
-            opportunities,
-            items.get("metadata") == "Missing",
-            "missing_metadata",
-            album,
-            "MEDIUM",
-            "Album is missing metadata cache coverage.",
-            "Refresh Metadata",
-        )
-        _append_if(
-            opportunities,
-            album.get("identity_confidence") not in ("HIGH", "MEDIUM"),
-            "identity_review",
-            album,
-            "MEDIUM",
-            "Album identity is not confidently resolved.",
-            "Review Identity",
-        )
-        _append_if(
-            opportunities,
-            status.get("health_percent", 100) < 70,
-            "low_album_health",
-            album,
-            "MEDIUM",
-            "Album health is below the maintenance threshold.",
-            "Review Album",
-        )
+        if category == CATEGORY_NEEDS_VALIDATION:
+            _append_if(opportunities, True, "missing_validation", album, priority, reason, "Validate Album")
+        elif category == CATEGORY_NEEDS_DOCUMENTATION:
+            _append_if(opportunities, items.get("nfo") != "Present", "missing_nfo", album, priority, reason, "Generate NFO")
+            _append_if(opportunities, items.get("sfv") != "Present", "missing_sfv", album, priority, reason, "Generate SFV")
+        elif category == CATEGORY_NEEDS_METADATA:
+            _append_if(opportunities, True, "missing_metadata", album, priority, reason, "Refresh Metadata")
+        elif category in {CATEGORY_NEEDS_REVIEW, CATEGORY_WARNINGS}:
+            if items.get("artwork") != "Present":
+                _append_if(opportunities, True, "missing_artwork", album, priority, reason, "Review Artwork")
+            elif items.get("playlist") != "Present":
+                _append_if(opportunities, True, "missing_playlist", album, priority, reason, "Review Playlist")
+            else:
+                _append_if(opportunities, True, "identity_review", album, priority, reason, "Review Album")
 
     return sorted(opportunities, key=lambda item: (PRIORITY_ORDER[item["priority"]], item["category"], item["artist"], item["album"]))
 
@@ -157,7 +109,7 @@ def render_opportunities_report(opportunities: list[dict[str, Any]], *, generate
         "",
         f"Generated: {generated_at}",
         "",
-        "Archive opportunities are read-only maintenance recommendations. No operations are executed by this report.",
+        "Archive opportunities are a secondary rendering of the canonical Maintenance model. No operations are executed by this report.",
         "",
         "## Summary",
         "",
@@ -200,7 +152,7 @@ def write_opportunities_report(opportunities: list[dict[str, Any]], reports_dir:
 
 
 def derive_hub_opportunities(library: dict[str, Any]) -> list[dict[str, Any]]:
-    opportunities = [_hub_opportunity(album) for album in library.get("albums", [])]
+    opportunities = [_hub_opportunity(album) for album in maintenance_records(library.get("albums", []))]
     return sorted(opportunities, key=lambda item: (PRIORITY_ORDER[item["priority"]], item["category"], item["artist"], item["album"]))
 
 
@@ -232,7 +184,7 @@ def render_hub_opportunities_report(opportunities: list[dict[str, Any]], *, gene
         "",
         f"Generated: {generated_at}",
         "",
-        "Opportunities are derived from existing Library, readiness, identity, metadata, and artifact evidence.",
+        "Opportunities are a secondary rendering of AlbumTruth-owned Maintenance categories.",
         "",
         "## Summary",
         "",
@@ -298,41 +250,24 @@ def _append_if(
 
 
 def _hub_opportunity(album: dict[str, Any]) -> dict[str, Any]:
-    readiness = album.get("archive_readiness", {})
-    metadata = album.get("metadata_detail", {})
-    readiness_state = readiness.get("state", "UNKNOWN")
-    metadata_state = metadata.get("state") or album.get("metadata_status", "UNKNOWN")
-
-    if readiness_state == "ARCHIVE_READY":
-        category = "ARCHIVE_READY"
-        priority = "LOW"
-        reason = "Album is archive-ready."
-        action = "Open Folder"
-    elif readiness_state in ("UNKNOWN", "NEEDS_REVIEW") or album.get("identity_confidence") not in ("HIGH", "MEDIUM"):
-        category = "NEEDS_REVIEW"
-        priority = "HIGH"
-        reason = readiness.get("reason") or "Identity or archive evidence needs review."
-        action = "Open Folder"
-    elif readiness_state == "NEEDS_VALIDATION":
-        category = "NEEDS_VALIDATION"
-        priority = "HIGH"
-        reason = readiness.get("reason") or "Validation evidence is missing."
-        action = "Validate Album"
-    elif readiness_state == "NEEDS_DOCUMENTATION":
-        category = "NEEDS_DOCUMENTATION"
-        priority = "MEDIUM"
-        reason = readiness.get("reason") or "Archive documentation is incomplete."
-        action = "Generate Documentation"
-    elif metadata_state != "CACHED":
-        category = "NEEDS_METADATA"
-        priority = "LOW"
-        reason = metadata.get("reason") or "Metadata is not cached."
-        action = "Refresh Metadata"
-    else:
-        category = "NEEDS_REVIEW"
-        priority = "MEDIUM"
-        reason = "Archive signals are incomplete."
-        action = "Open Folder"
+    maintenance_category = album["maintenance_category"]
+    category = {
+        CATEGORY_NEEDS_VALIDATION: "NEEDS_VALIDATION",
+        CATEGORY_NEEDS_DOCUMENTATION: "NEEDS_DOCUMENTATION",
+        CATEGORY_NEEDS_METADATA: "NEEDS_METADATA",
+        CATEGORY_NEEDS_REVIEW: "NEEDS_REVIEW",
+        CATEGORY_WARNINGS: "NEEDS_REVIEW",
+        CATEGORY_READY: "ARCHIVE_READY",
+    }[maintenance_category]
+    action = {
+        CATEGORY_NEEDS_VALIDATION: "Validate Album",
+        CATEGORY_NEEDS_DOCUMENTATION: "Generate Documentation",
+        CATEGORY_NEEDS_METADATA: "Refresh Metadata",
+        CATEGORY_NEEDS_REVIEW: "Open Folder",
+        CATEGORY_WARNINGS: "Open Folder",
+        CATEGORY_READY: "Open Folder",
+    }[maintenance_category]
+    readiness_state = album.get("album_truth", {}).get("readiness", "UNKNOWN")
 
     return {
         "id": f"{category}:{album.get('album_id', '')}",
@@ -342,8 +277,8 @@ def _hub_opportunity(album: dict[str, Any]) -> dict[str, Any]:
         "album": album.get("title", ""),
         "lifecycle_state": album.get("lifecycle_state", ""),
         "archive_readiness": readiness_state,
-        "priority": priority,
-        "reason": reason,
+        "priority": "LOW" if album["maintenance_priority"] == "INFO" else album["maintenance_priority"],
+        "reason": album["maintenance_reason"],
         "recommended_action": action,
     }
 

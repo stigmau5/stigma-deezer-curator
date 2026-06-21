@@ -65,6 +65,7 @@ from audio_division.maintenance import (
     maintenance_action_target,
     maintenance_albums,
     maintenance_counts,
+    maintenance_operation_for_album,
     maintenance_summaries,
 )
 from audio_division.opportunities import (
@@ -250,10 +251,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.tabs.add(artwork_tab, text="Artwork")
 
         opportunities_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(opportunities_tab, text="Archive Opportunities")
+        self.tabs.add(opportunities_tab, text="Archive Opportunities (Secondary)")
 
         hub_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(hub_tab, text="Opportunities")
+        self.tabs.add(hub_tab, text="Opportunities (Secondary)")
 
         settings_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(settings_tab, text="Settings")
@@ -533,7 +534,7 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(monitor_actions, text="Open Folder", command=self.open_selected_incoming_folder).pack(side="left")
         ttk.Button(monitor_actions, text="Queue For Processing", command=self.queue_selected_incoming_album).pack(side="left", padx=(4, 0))
 
-        maintenance = ttk.LabelFrame(album_frame, text="Maintenance Center", padding=4)
+        maintenance = ttk.LabelFrame(album_frame, text="Maintenance Action Center", padding=4)
         maintenance.pack(fill="both", expand=True, pady=(6, 0))
         summary = ttk.Frame(maintenance)
         summary.pack(fill="x", pady=(0, 4))
@@ -570,7 +571,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.maintenance_album_tree = ttk.Treeview(
             maintenance_panes,
-            columns=("artist", "album", "priority", "reason"),
+            columns=("artist", "album", "priority", "operation", "reason"),
             show="headings",
             height=6,
             selectmode="browse",
@@ -579,6 +580,7 @@ class DeezerCuratorGUI(tk.Tk):
             ("artist", "Artist", 140),
             ("album", "Album", 220),
             ("priority", "Priority", 80),
+            ("operation", "Next Action", 140),
             ("reason", "Reason", 260),
         ):
             self.maintenance_album_tree.heading(column, text=title)
@@ -589,6 +591,7 @@ class DeezerCuratorGUI(tk.Tk):
         maintenance_actions = ttk.Frame(maintenance)
         maintenance_actions.pack(fill="x", pady=(4, 0))
         ttk.Button(maintenance_actions, text="Open Album", command=self.open_selected_maintenance_album).pack(side="left")
+        ttk.Button(maintenance_actions, text="Run Recommended Action", command=self.run_recommended_maintenance_operation).pack(side="left", padx=(4, 0))
         ttk.Button(maintenance_actions, text="Validate Album", command=lambda: self.run_maintenance_operation("validate_album")).pack(side="left", padx=(4, 0))
         ttk.Button(maintenance_actions, text="Generate Documentation", command=lambda: self.run_maintenance_operation("generate_documentation")).pack(side="left", padx=(4, 0))
         ttk.Button(maintenance_actions, text="Open Folder", command=lambda: self.run_maintenance_operation("open_album_folder")).pack(side="left", padx=(4, 0))
@@ -991,7 +994,7 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_readiness.needs_review", "Needs Review"),
                 ("archive_readiness.unknown", "Unknown"),
             ]),
-            ("Top Opportunities", [
+            ("Secondary: Top Opportunities", [
                 ("top_opportunities.needs_validation", "Needs Validation"),
                 ("top_opportunities.needs_documentation", "Needs Documentation"),
                 ("top_opportunities.needs_metadata", "Needs Metadata"),
@@ -999,7 +1002,7 @@ class DeezerCuratorGUI(tk.Tk):
                 ("top_opportunities.archive_ready", "Archive Ready"),
                 ("top_opportunities.most_urgent_category", "Most Urgent"),
             ]),
-            ("Archive Actions", [
+            ("Secondary: Archive Actions", [
                 ("archive_actions.action_count", "Action Count"),
                 ("archive_actions.missing_nfo", "Missing NFO"),
                 ("archive_actions.missing_sfv", "Missing SFV"),
@@ -1564,6 +1567,7 @@ class DeezerCuratorGUI(tk.Tk):
                     row.get("artist", ""),
                     row.get("title", ""),
                     row.get("maintenance_priority", ""),
+                    row.get("maintenance_operation", ""),
                     row.get("maintenance_reason", ""),
                 ),
             )
@@ -1590,6 +1594,13 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_selected_album = album
         self.set_archive_detail(album)
         self.archive_operation_result_var.set("Album opened in workspace.")
+
+    def run_recommended_maintenance_operation(self):
+        album = self.selected_maintenance_album()
+        if not album:
+            self.archive_operation_result_var.set("Failure: no maintenance album selected.")
+            return
+        self.run_maintenance_operation(maintenance_operation_for_album(album))
 
     def run_maintenance_operation(self, operation_id: str):
         album = self.selected_maintenance_album()

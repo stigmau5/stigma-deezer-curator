@@ -33,6 +33,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
     readiness = {}
     hub_opportunities = {}
     album_truth = {}
+    maintenance_albums = None
     try:
         from audio_division.library import library_from_data_dir
         from audio_division.opportunities import derive_hub_opportunities, hub_opportunity_summary
@@ -41,6 +42,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
         settings = load_audio_division_settings(data_dir / "audio_division_settings.json")
         archive_root = settings.get("archive_paths", {}).get("main_archive_root", "")
         library = library_from_data_dir(data_dir, Path(archive_root) if archive_root else None)
+        maintenance_albums = library.get("albums", [])
         readiness = library.get("archive_readiness_summary", {})
         album_truth = library.get("summary", {}).get("album_truth", {})
         hub_opportunities = hub_opportunity_summary(derive_hub_opportunities(library))
@@ -48,6 +50,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
         readiness = {}
         hub_opportunities = {}
         album_truth = {}
+        maintenance_albums = None
     return compute_dashboard_summary(
         sources["lifecycle"],
         sources["identity"],
@@ -56,6 +59,7 @@ def dashboard_summary(data_dir: Path) -> dict[str, Any]:
         readiness,
         hub_opportunities,
         album_truth,
+        maintenance_albums,
     )
 
 
@@ -67,6 +71,7 @@ def compute_dashboard_summary(
     readiness_summary: dict[str, Any] | None = None,
     hub_opportunity_summary_data: dict[str, Any] | None = None,
     album_truth_summary: dict[str, Any] | None = None,
+    maintenance_albums: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     lifecycle_summary = lifecycle.get("summary", {})
     state_counts = lifecycle_summary.get("state_evidence_counts", {})
@@ -91,13 +96,36 @@ def compute_dashboard_summary(
     validation_coverage = _ratio(dashboard_validated, total_albums)
 
     archive_strength = _archive_strength_score(total_albums, identity_counts.get("HIGH", 0), dashboard_validated, metadata_coverage)
-    actions = generate_archive_actions(lifecycle, identity, metadata)
+    actions = generate_archive_actions(lifecycle, identity, metadata, maintenance_albums)
     actions_summary = action_summary(actions)
     operations_summary = operation_summary(actions)
     first_action = actions[0] if actions else {}
     history = (operation_history or {}).get("history", [])
     readiness_counts = (readiness_summary or {}).get("counts", {})
     hub_counts = (hub_opportunity_summary_data or {}).get("by_category", {})
+    most_urgent_category = (hub_opportunity_summary_data or {}).get("most_urgent_category", "")
+    maintenance_summary = {}
+    if maintenance_albums is not None:
+        from audio_division.maintenance import maintenance_counts, maintenance_summaries
+
+        counts = maintenance_counts(maintenance_albums)
+        maintenance_summary = {
+            "albums": counts.get("albums", 0),
+            "categories": counts.get("categories", {}),
+            "areas": maintenance_summaries(maintenance_albums),
+        }
+        canonical_counts = maintenance_summary["categories"]
+        hub_counts = {
+            "NEEDS_VALIDATION": canonical_counts.get("needs_validation", 0),
+            "NEEDS_DOCUMENTATION": canonical_counts.get("needs_documentation", 0),
+            "NEEDS_METADATA": canonical_counts.get("needs_metadata", 0),
+            "NEEDS_REVIEW": canonical_counts.get("needs_review", 0) + canonical_counts.get("warnings", 0),
+            "ARCHIVE_READY": canonical_counts.get("ready", 0),
+        }
+        most_urgent_category = next(
+            (category for category in ("NEEDS_VALIDATION", "NEEDS_DOCUMENTATION", "NEEDS_METADATA", "NEEDS_REVIEW") if hub_counts.get(category)),
+            "ARCHIVE_READY" if hub_counts.get("ARCHIVE_READY") else "",
+        )
 
     return {
         "archive_overview": {
@@ -151,8 +179,9 @@ def compute_dashboard_summary(
             "needs_metadata": hub_counts.get("NEEDS_METADATA", 0),
             "needs_review": hub_counts.get("NEEDS_REVIEW", 0),
             "archive_ready": hub_counts.get("ARCHIVE_READY", 0),
-            "most_urgent_category": (hub_opportunity_summary_data or {}).get("most_urgent_category", ""),
+            "most_urgent_category": most_urgent_category,
         },
+        "maintenance": maintenance_summary,
         "archive_actions": {
             "action_count": actions_summary["total_actions"],
             **{category: actions_summary["by_category"].get(category, 0) for category in ACTION_CATEGORIES},
