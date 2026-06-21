@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from audio_division.artifacts import detect_artifacts
 from audio_division.operation_runner import record_operation_history
 
 PLAYBACK_OPERATIONS = {"play_album", "play_playlist"}
@@ -38,13 +39,7 @@ def player_provider_from_settings(settings: dict[str, Any]) -> PlayerProvider:
 
 
 def first_playlist(album_path: Path) -> Path | None:
-    if not album_path.exists() or not album_path.is_dir():
-        return None
-    playlists = [
-        item
-        for item in album_path.iterdir()
-        if item.is_file() and item.suffix.lower() in PLAYLIST_SUFFIXES
-    ]
+    playlists = detect_artifacts(album_path).files_for("playlist")
     if not playlists:
         return None
     return sorted(playlists, key=lambda path: (_playlist_rank(path), path.name.lower()))[0]

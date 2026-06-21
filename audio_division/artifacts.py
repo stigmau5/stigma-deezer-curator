@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -8,49 +10,166 @@ from typing import Any
 from curator.atomic import atomic_write_text
 
 ARTIFACT_TYPES = ("nfo", "sfv", "playlist", "artwork", "validation_log")
+CANONICAL_ARTIFACT_TYPES = ("audio", "artwork", "nfo", "sfv", "playlist", "validation")
+AUDIO_SUFFIXES = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aiff"}
 ARTWORK_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
 PREFERRED_ARTWORK_FILENAMES = ("cover.jpg", "folder.jpg", "front.jpg", "cover.png", "folder.png")
+VALIDATION_MARKER_FILENAME = "STIGMA_VALIDATED.txt"
+DISC_FOLDER_PATTERN = re.compile(r"^(cd|disc)[ _-]?\d+$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class AlbumArtifacts:
+    folder: Path
+    exists: bool
+    available: bool
+    files: dict[str, tuple[Path, ...]]
+    root_files: tuple[Path, ...]
+    direct_audio_files: tuple[Path, ...]
+    selected_artwork: Path | None
+
+    def files_for(self, artifact: str) -> tuple[Path, ...]:
+        return self.files.get(artifact, ())
+
+    def present(self, artifact: str) -> bool:
+        return bool(self.files_for(artifact))
+
+    def count(self, artifact: str) -> int:
+        return len(self.files_for(artifact))
+
+    def first_file(self, artifact: str) -> Path | None:
+        files = self.files_for(artifact)
+        return sorted(files)[0] if files else None
+
+    def preferred_file(self, artifact: str, filenames: tuple[str, ...] = ()) -> Path | None:
+        files = self.files_for(artifact)
+        by_name = {path.name.lower(): path for path in files}
+        for filename in filenames:
+            selected = by_name.get(filename.lower())
+            if selected:
+                return selected
+        return self.first_file(artifact)
+
+    def named_file(self, filename: str, *, case_sensitive: bool = True) -> Path | None:
+        if case_sensitive:
+            return next((path for path in self.root_files if path.name == filename), None)
+        by_name = {path.name.lower(): path for path in self.root_files}
+        return by_name.get(filename.lower())
+
+    def matching_files(self, suffixes: set[str]) -> list[Path]:
+        normalized = {suffix.lower() for suffix in suffixes}
+        return sorted(
+            (path for paths in self.files.values() for path in paths if path.parent == self.folder and path.suffix.lower() in normalized),
+            key=lambda path: path.name.lower(),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        validation_count = self.count("validation")
+        return {
+            "folder": str(self.folder),
+            "exists": self.exists,
+            "nfo": self.present("nfo"),
+            "sfv": self.present("sfv"),
+            "playlist": self.present("playlist"),
+            "artwork": self.present("artwork"),
+            "artwork_path": str(self.selected_artwork) if self.selected_artwork else "",
+            "artwork_name": self.selected_artwork.name if self.selected_artwork else "",
+            "validation_log": bool(validation_count),
+            "counts": {
+                "nfo": self.count("nfo"),
+                "sfv": self.count("sfv"),
+                "playlist": self.count("playlist"),
+                "artwork": self.count("artwork"),
+                "validation_log": validation_count,
+            },
+        }
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        return {
+            "folder": str(self.folder),
+            "exists": self.exists,
+            "available": self.available,
+            "artifacts": {
+                artifact: {
+                    "present": self.present(artifact),
+                    "count": self.count(artifact),
+                    "paths": [str(path) for path in sorted(self.files_for(artifact))],
+                }
+                for artifact in CANONICAL_ARTIFACT_TYPES
+            },
+            "selected_artwork": str(self.selected_artwork) if self.selected_artwork else "",
+        }
+
+
+def detect_artifacts(album_path: str | Path | None) -> AlbumArtifacts:
+    path = Path(album_path) if album_path else Path("")
+    exists = bool(album_path) and path.exists()
+    available = exists and path.is_dir()
+    try:
+        root_files = tuple(item for item in path.iterdir() if item.is_file()) if available else ()
+    except OSError:
+        root_files = ()
+    direct_audio = tuple(item for item in root_files if item.suffix.lower() in AUDIO_SUFFIXES)
+    disc_audio: list[Path] = []
+    if available:
+        for folder in _disc_folders(path):
+            try:
+                disc_audio.extend(item for item in folder.iterdir() if item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES)
+            except OSError:
+                continue
+    files = {
+        "audio": direct_audio + tuple(disc_audio),
+        "artwork": tuple(item for item in root_files if item.suffix.lower() in ARTWORK_SUFFIXES),
+        "nfo": tuple(item for item in root_files if item.suffix.lower() == ".nfo"),
+        "sfv": tuple(item for item in root_files if item.suffix.lower() == ".sfv"),
+        "playlist": tuple(item for item in root_files if item.suffix.lower() in PLAYLIST_SUFFIXES),
+        "validation": tuple(item for item in root_files if item.name == VALIDATION_MARKER_FILENAME),
+    }
+    artwork = _select_preferred(files["artwork"], PREFERRED_ARTWORK_FILENAMES, casefold_sort=True)
+    return AlbumArtifacts(path, exists, available, files, root_files, direct_audio, artwork)
 
 
 def detect_album_artifacts(album_path: Path) -> dict[str, Any]:
-    files = list(album_path.iterdir()) if album_path.exists() and album_path.is_dir() else []
-    nfo_files = [path for path in files if path.is_file() and path.suffix.lower() == ".nfo"]
-    sfv_files = [path for path in files if path.is_file() and path.suffix.lower() == ".sfv"]
-    playlist_files = [path for path in files if path.is_file() and path.suffix.lower() in {".m3u", ".m3u8"}]
-    artwork_files = [path for path in files if path.is_file() and path.suffix.lower() in ARTWORK_SUFFIXES]
-    artwork_file = select_artwork_file(album_path, artwork_files)
-    validation_files = [path for path in files if path.is_file() and path.name == "STIGMA_VALIDATED.txt"]
-    return {
-        "folder": str(album_path),
-        "exists": album_path.exists(),
-        "nfo": bool(nfo_files),
-        "sfv": bool(sfv_files),
-        "playlist": bool(playlist_files),
-        "artwork": bool(artwork_files),
-        "artwork_path": str(artwork_file) if artwork_file else "",
-        "artwork_name": artwork_file.name if artwork_file else "",
-        "validation_log": bool(validation_files),
-        "counts": {
-            "nfo": len(nfo_files),
-            "sfv": len(sfv_files),
-            "playlist": len(playlist_files),
-            "artwork": len(artwork_files),
-            "validation_log": len(validation_files),
-        },
-    }
+    return detect_artifacts(album_path).to_dict()
 
 
 def select_artwork_file(album_path: Path, artwork_files: list[Path] | None = None) -> Path | None:
     if not album_path.exists() or not album_path.is_dir():
         return None
-    files = artwork_files
-    if files is None:
-        files = [path for path in album_path.iterdir() if path.is_file() and path.suffix.lower() in ARTWORK_SUFFIXES]
+    if artwork_files is None:
+        return detect_artifacts(album_path).selected_artwork
+    return _select_preferred(tuple(artwork_files), PREFERRED_ARTWORK_FILENAMES, casefold_sort=True)
+
+
+def is_disc_folder(path: Path) -> bool:
+    return bool(DISC_FOLDER_PATTERN.match(path.name.strip()))
+
+
+def _disc_folders(album_path: Path) -> list[Path]:
+    try:
+        return sorted(
+            (path for path in album_path.iterdir() if path.is_dir() and is_disc_folder(path)),
+            key=lambda path: path.name.lower(),
+        )
+    except OSError:
+        return []
+
+
+def _select_preferred(
+    files: tuple[Path, ...],
+    filenames: tuple[str, ...],
+    *,
+    casefold_sort: bool = False,
+) -> Path | None:
     by_name = {path.name.lower(): path for path in files}
-    for preferred in PREFERRED_ARTWORK_FILENAMES:
-        if preferred in by_name:
-            return by_name[preferred]
-    return sorted(files, key=lambda path: path.name.lower())[0] if files else None
+    for filename in filenames:
+        selected = by_name.get(filename.lower())
+        if selected:
+            return selected
+    if not files:
+        return None
+    return sorted(files, key=lambda path: path.name.lower())[0] if casefold_sort else sorted(files)[0]
 
 
 def scan_archive_artifacts(album_paths: list[Path]) -> dict[str, Any]:

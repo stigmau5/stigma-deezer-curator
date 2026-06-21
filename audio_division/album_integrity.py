@@ -4,8 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.archive_audit import broken_playlist_references, broken_sfv_references
-from audio_division.archive_registry import AUDIO_SUFFIXES, count_audio_tracks
-from audio_division.artifacts import detect_album_artifacts
+from audio_division.artifacts import AlbumArtifacts, detect_artifacts
 
 
 INTEGRITY_CHECKS = (
@@ -18,10 +17,14 @@ INTEGRITY_CHECKS = (
 )
 
 
-def album_integrity(details: dict[str, Any]) -> dict[str, Any]:
+def album_integrity(
+    details: dict[str, Any],
+    detected_artifacts: AlbumArtifacts | None = None,
+) -> dict[str, Any]:
     archive_path = Path(str(details.get("archive_path") or "")) if details.get("archive_path") else None
     filesystem_available = bool(archive_path and archive_path.exists() and archive_path.is_dir())
-    filesystem = detect_album_artifacts(archive_path) if filesystem_available and archive_path else {}
+    detected = detected_artifacts or (detect_artifacts(archive_path) if filesystem_available and archive_path else None)
+    filesystem = detected.to_dict() if detected else {}
     truth = details.get("album_truth", {})
     status = details.get("album_status", {})
     checks = [
@@ -30,9 +33,9 @@ def album_integrity(details: dict[str, Any]) -> dict[str, Any]:
         artifact_check("sfv", filesystem, truth, status, filesystem_available),
         artifact_check("playlist", filesystem, truth, status, filesystem_available),
         artifact_check("validation", filesystem, truth, status, filesystem_available, artifact_key="validation_log"),
-        audio_check(archive_path, filesystem_available),
+        audio_check(archive_path, filesystem_available, detected),
     ]
-    warnings = integrity_warnings(checks, archive_path, filesystem_available)
+    warnings = integrity_warnings(checks, archive_path, filesystem_available, detected)
     return {
         "checks": checks,
         "health_score": health_score(checks, warnings),
@@ -81,10 +84,14 @@ def artifact_check(
     }
 
 
-def audio_check(archive_path: Path | None, filesystem_available: bool) -> dict[str, str]:
+def audio_check(
+    archive_path: Path | None,
+    filesystem_available: bool,
+    detected: AlbumArtifacts | None = None,
+) -> dict[str, str]:
     if not filesystem_available or not archive_path:
         return {"id": "audio_files", "label": "Audio Files", "status": "Unknown", "source": "none", "path": ""}
-    count = count_audio_tracks(archive_path)
+    count = (detected or detect_artifacts(archive_path)).count("audio")
     return {
         "id": "audio_files",
         "label": "Audio Files",
@@ -94,7 +101,12 @@ def audio_check(archive_path: Path | None, filesystem_available: bool) -> dict[s
     }
 
 
-def integrity_warnings(checks: list[dict[str, str]], archive_path: Path | None, filesystem_available: bool) -> list[str]:
+def integrity_warnings(
+    checks: list[dict[str, str]],
+    archive_path: Path | None,
+    filesystem_available: bool,
+    detected: AlbumArtifacts | None = None,
+) -> list[str]:
     warnings = []
     if not filesystem_available:
         warnings.append("Archive folder is unavailable; integrity is derived from AlbumTruth where possible.")
@@ -104,9 +116,9 @@ def integrity_warnings(checks: list[dict[str, str]], archive_path: Path | None, 
         elif check["status"] == "Unknown":
             warnings.append(f"{check['label']} is unknown.")
     if filesystem_available and archive_path:
-        for broken in broken_playlist_references(archive_path):
+        for broken in broken_playlist_references(archive_path, detected):
             warnings.append(f"Broken playlist reference: {broken}")
-        for broken in broken_sfv_references(archive_path):
+        for broken in broken_sfv_references(archive_path, detected):
             warnings.append(f"Broken SFV reference: {broken}")
     return warnings
 

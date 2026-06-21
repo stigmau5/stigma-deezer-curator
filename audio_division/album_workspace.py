@@ -5,12 +5,11 @@ from typing import Any
 
 from audio_division.album_integrity import album_integrity
 from audio_division.album_presentation import album_presentation
-from audio_division.archive_registry import AUDIO_SUFFIXES
+from audio_division.artifacts import AlbumArtifacts, detect_artifacts
 from audio_division.cover_widget import album_cover_info
 from audio_division.playback import playback_summary
 from audio_division.relationships import album_relationships, render_relationships
 
-PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
 NFO_READ_LIMIT = 20000
 
 
@@ -21,11 +20,12 @@ def album_workspace(
 ) -> dict[str, Any]:
     presentation = album_presentation(details)
     archive_path = Path(details.get("archive_path", "")) if details.get("archive_path") else None
-    cover = cover_info(details, archive_path)
-    nfo = nfo_info(archive_path)
-    tracklist = tracklist_info(archive_path, details, metadata or {})
+    detected = detect_artifacts(archive_path) if archive_path else None
+    cover = cover_info(details, archive_path, detected)
+    nfo = nfo_info(archive_path, detected)
+    tracklist = tracklist_info(archive_path, details, metadata or {}, detected)
     files = filesystem_listing(archive_path)
-    integrity = album_integrity(details)
+    integrity = album_integrity(details, detected)
     relationships = album_relationships(details, collection_albums or [])
     status = details.get("album_status", {})
     readiness = details.get("archive_readiness", {})
@@ -43,12 +43,16 @@ def album_workspace(
     }
 
 
-def cover_info(details: dict[str, Any], archive_path: Path | None = None) -> dict[str, Any]:
-    return album_cover_info(details, archive_path)
+def cover_info(
+    details: dict[str, Any],
+    archive_path: Path | None = None,
+    detected: AlbumArtifacts | None = None,
+) -> dict[str, Any]:
+    return album_cover_info(details, archive_path, detected)
 
 
-def nfo_info(archive_path: Path | None) -> dict[str, Any]:
-    nfo = first_file(archive_path, {".nfo"}) if archive_path else None
+def nfo_info(archive_path: Path | None, detected: AlbumArtifacts | None = None) -> dict[str, Any]:
+    nfo = (detected or detect_artifacts(archive_path)).first_file("nfo") if archive_path else None
     if not nfo:
         return {"status": "Missing", "path": "", "content": "No NFO found."}
     try:
@@ -62,15 +66,17 @@ def tracklist_info(
     archive_path: Path | None,
     details: dict[str, Any],
     metadata: dict[str, Any],
+    detected: AlbumArtifacts | None = None,
 ) -> dict[str, Any]:
     if archive_path:
-        playlist = first_file(archive_path, PLAYLIST_SUFFIXES)
+        detected = detected or detect_artifacts(archive_path)
+        playlist = detected.first_file("playlist")
         if playlist:
             tracks = parse_playlist(playlist)
             if tracks:
                 return {"source": "playlist", "path": str(playlist), "tracks": tracks}
 
-        tracks = filesystem_tracks(archive_path)
+        tracks = filesystem_tracks(archive_path, detected)
         if tracks:
             return {"source": "filesystem", "path": str(archive_path), "tracks": tracks}
 
@@ -113,10 +119,11 @@ def parse_playlist(path: Path) -> list[str]:
     return tracks
 
 
-def filesystem_tracks(path: Path) -> list[str]:
-    if not path.exists() or not path.is_dir():
+def filesystem_tracks(path: Path, detected: AlbumArtifacts | None = None) -> list[str]:
+    detected = detected or detect_artifacts(path)
+    if not detected.available:
         return []
-    tracks = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES)
+    tracks = sorted(detected.direct_audio_files)
     return [_display_track(item.name, index) for index, item in enumerate(tracks, start=1)]
 
 
@@ -170,7 +177,7 @@ def metadata_tracks(album_id: Any, metadata: dict[str, Any]) -> list[str]:
 def first_file(path: Path | None, suffixes: set[str]) -> Path | None:
     if not path or not path.exists() or not path.is_dir():
         return None
-    matches = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in suffixes)
+    matches = sorted(detect_artifacts(path).matching_files(suffixes))
     return matches[0] if matches else None
 
 

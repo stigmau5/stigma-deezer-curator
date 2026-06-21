@@ -6,10 +6,14 @@ import tkinter as tk
 from pathlib import Path
 from typing import Any, Callable
 
-from audio_division.artifacts import select_artwork_file
+from audio_division.artifacts import AlbumArtifacts, detect_artifacts
 
 
-def album_cover_info(details: dict[str, Any], archive_path: Path | None = None) -> dict[str, str]:
+def album_cover_info(
+    details: dict[str, Any],
+    archive_path: Path | None = None,
+    detected_artifacts: AlbumArtifacts | None = None,
+) -> dict[str, str]:
     artwork = details.get("artwork", {}) if isinstance(details.get("artwork"), dict) else {}
     local = artwork.get("local")
     local_path = Path(local) if isinstance(local, (str, Path)) and local else None
@@ -17,7 +21,7 @@ def album_cover_info(details: dict[str, Any], archive_path: Path | None = None) 
         return _present(local_path)
 
     if archive_path:
-        selected = select_artwork_file(archive_path)
+        selected = (detected_artifacts or detect_artifacts(archive_path)).selected_artwork
         if selected:
             return _present(selected)
 

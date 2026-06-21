@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from audio_division.artifacts import (
+    AlbumArtifacts,
+    PREFERRED_ARTWORK_FILENAMES,
+    VALIDATION_MARKER_FILENAME,
+    detect_artifacts,
+)
 from audio_division.validation_truth import (
     CONFIDENCE_HIGH,
     CONFIDENCE_LOW,
@@ -22,9 +28,6 @@ from audio_division.validation_truth import (
 ARTIFACT_FIELDS = ("validation", "nfo", "sfv", "playlist", "artwork", "metadata")
 READINESS_STATES = ("ARCHIVE_READY", "NEEDS_VALIDATION", "NEEDS_DOCUMENTATION", "NEEDS_REVIEW", "UNKNOWN")
 PROCESSING_STATES = ("DISCOVERED", "DOWNLOADED", "PROCESSING", "ARCHIVED")
-ARTWORK_NAMES = ("cover.jpg", "folder.jpg", "front.jpg", "cover.png", "folder.png")
-ARTWORK_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-PLAYLIST_SUFFIXES = {".m3u", ".m3u8"}
 PRESENT = "Present"
 MISSING = "Missing"
 UNKNOWN = "Unknown"
@@ -296,8 +299,9 @@ def album_truth(
     metadata_state: str | None = None,
     metadata_album: dict[str, Any] | None = None,
     identity_confidence: str = UNKNOWN,
+    detected_artifacts: AlbumArtifacts | None = None,
 ) -> AlbumTruth:
-    filesystem = filesystem_artifacts(archive_path)
+    filesystem = filesystem_artifacts(archive_path, detected_artifacts)
     validator = normalize_validator_evidence(validator_evidence)
     registry = registry_artifacts or {}
     values = {
@@ -400,26 +404,27 @@ def primary_source(values: dict[str, TruthValue]) -> str:
     return "none"
 
 
-def filesystem_artifacts(archive_path: str | Path | None) -> dict[str, TruthValue]:
+def filesystem_artifacts(
+    archive_path: str | Path | None,
+    detected: AlbumArtifacts | None = None,
+) -> dict[str, TruthValue]:
     if not archive_path:
         return {}
-    path = Path(archive_path)
-    if not path.exists() or not path.is_dir():
+    detected = detected or detect_artifacts(archive_path)
+    if not detected.available:
         return {}
-    files = [item for item in path.iterdir() if item.is_file()]
-    by_name = {item.name.lower(): item for item in files}
     return {
         "validation": _file_truth(
-            by_name.get("STIGMA_VALIDATED.txt".lower()),
+            detected.named_file(VALIDATION_MARKER_FILENAME, case_sensitive=False),
             SOURCE_ARCHIVE_MARKER,
             present_reason="Archive validation marker exists.",
             missing_reason="Archive validation marker is missing.",
             confidence=CONFIDENCE_HIGH,
         ),
-        "nfo": _first_truth(by_name, files, "filesystem", preferred=("release.nfo",), suffixes={".nfo"}),
-        "sfv": _first_truth(by_name, files, "filesystem", preferred=("release.sfv",), suffixes={".sfv"}),
-        "playlist": _first_truth(by_name, files, "filesystem", preferred=("playlist.m3u8",), suffixes=PLAYLIST_SUFFIXES),
-        "artwork": _first_truth(by_name, files, "filesystem", preferred=ARTWORK_NAMES, suffixes=ARTWORK_SUFFIXES),
+        "nfo": _artifact_truth(detected.preferred_file("nfo", ("release.nfo",))),
+        "sfv": _artifact_truth(detected.preferred_file("sfv", ("release.sfv",))),
+        "playlist": _artifact_truth(detected.preferred_file("playlist", ("playlist.m3u8",))),
+        "artwork": _artifact_truth(detected.preferred_file("artwork", PREFERRED_ARTWORK_FILENAMES)),
     }
 
 
@@ -547,20 +552,8 @@ def _file_truth(
     return TruthValue(MISSING, source, reason=missing_reason, confidence=CONFIDENCE_NONE if source == SOURCE_ARCHIVE_MARKER else confidence)
 
 
-def _first_truth(
-    by_name: dict[str, Path],
-    files: list[Path],
-    source: str,
-    *,
-    preferred: tuple[str, ...],
-    suffixes: set[str],
-) -> TruthValue:
-    for name in preferred:
-        path = by_name.get(name.lower())
-        if path:
-            return TruthValue(PRESENT, source, str(path))
-    matches = sorted(item for item in files if item.suffix.lower() in suffixes)
-    return TruthValue(PRESENT, source, str(matches[0])) if matches else TruthValue(MISSING, source)
+def _artifact_truth(path: Path | None) -> TruthValue:
+    return TruthValue(PRESENT, "filesystem", str(path)) if path else TruthValue(MISSING, "filesystem")
 
 
 def _bool_truth(value: bool, source: str, path: str = "") -> TruthValue:

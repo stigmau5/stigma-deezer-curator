@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.album_truth import album_truth
-from audio_division.archive_registry import count_audio_tracks, is_album_root
-from audio_division.artifacts import detect_album_artifacts
+from audio_division.archive_registry import is_album_root
+from audio_division.artifacts import AlbumArtifacts, detect_artifacts, is_disc_folder
 from audio_division.physical_archive import archive_identity_for_row, build_identity_lookup
 from audio_division.validation_truth import (
     merge_validation_evidence,
@@ -42,7 +42,6 @@ WARNING_ISSUES = {
     "unexpected_layout",
 }
 ERROR_ISSUES = {"broken_playlist_reference", "broken_sfv_reference"}
-AUDIO_SUFFIXES = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aiff"}
 CRC_PATTERN = re.compile(r"^[0-9a-fA-F]{8}$")
 
 
@@ -101,15 +100,17 @@ def audit_archive(
 
 def audit_album(row: dict[str, Any], archive_root: Path, validation_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
     path = Path(str(row.get("archive_path") or ""))
-    artifacts = detect_album_artifacts(path)
+    detected = detect_artifacts(path)
+    artifacts = detected.to_dict()
     truth = album_truth(
         artist=artist_from_row(row),
         album=album_from_row(row),
         archive_path=path,
         registry_artifacts=artifacts,
         validator_evidence=validation_evidence or {},
+        detected_artifacts=detected,
     )
-    track_count = count_audio_tracks(path)
+    track_count = detected.count("audio")
     issues: list[dict[str, Any]] = []
 
     missing_checks = {
@@ -132,9 +133,9 @@ def audit_album(row: dict[str, Any], archive_root: Path, validation_evidence: di
         issues.append(issue(row, "missing_audio", "No audio files were found in the album root or disc folders.", "warning"))
 
     issues.extend(unexpected_layout_issues(row, path, archive_root))
-    for broken in broken_playlist_references(path):
+    for broken in broken_playlist_references(path, detected):
         issues.append(issue(row, "broken_playlist_reference", f"Playlist reference does not exist: {broken}", "error"))
-    for broken in broken_sfv_references(path):
+    for broken in broken_sfv_references(path, detected):
         issues.append(issue(row, "broken_sfv_reference", f"SFV reference does not exist: {broken}", "error"))
 
     return {
@@ -165,32 +166,30 @@ def unexpected_layout_issues(row: dict[str, Any], album_path: Path, archive_root
     return issues
 
 
-def broken_playlist_references(album_path: Path) -> list[str]:
+def broken_playlist_references(album_path: Path, detected: AlbumArtifacts | None = None) -> list[str]:
     broken = []
-    for playlist in artifact_files(album_path, {".m3u", ".m3u8"}):
+    for playlist in artifact_files(album_path, {".m3u", ".m3u8"}, detected):
         for reference in playlist_references(playlist):
             if not resolve_reference(playlist.parent, reference).exists():
                 broken.append(f"{playlist.name}: {reference}")
     return broken
 
 
-def broken_sfv_references(album_path: Path) -> list[str]:
+def broken_sfv_references(album_path: Path, detected: AlbumArtifacts | None = None) -> list[str]:
     broken = []
-    for sfv in artifact_files(album_path, {".sfv"}):
+    for sfv in artifact_files(album_path, {".sfv"}, detected):
         for reference in sfv_references(sfv):
             if not resolve_reference(sfv.parent, reference).exists():
                 broken.append(f"{sfv.name}: {reference}")
     return broken
 
 
-def artifact_files(album_path: Path, suffixes: set[str]) -> list[Path]:
-    try:
-        return sorted(
-            (path for path in album_path.iterdir() if path.is_file() and path.suffix.lower() in suffixes),
-            key=lambda path: path.name.lower(),
-        )
-    except OSError:
-        return []
+def artifact_files(
+    album_path: Path,
+    suffixes: set[str],
+    detected: AlbumArtifacts | None = None,
+) -> list[Path]:
+    return (detected or detect_artifacts(album_path)).matching_files(suffixes)
 
 
 def playlist_references(playlist: Path) -> list[str]:
@@ -230,14 +229,11 @@ def safe_read_lines(path: Path) -> list[str]:
 
 
 def count_direct_audio(path: Path) -> int:
-    try:
-        return sum(1 for item in path.iterdir() if item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES)
-    except OSError:
-        return 0
+    return len(detect_artifacts(path).direct_audio_files)
 
 
 def is_expected_disc_folder(path: Path) -> bool:
-    return bool(re.match(r"^(cd|disc)[ _-]?\d+$", path.name.strip(), re.IGNORECASE))
+    return is_disc_folder(path)
 
 
 def issue(row: dict[str, Any], category: str, reason: str, severity: str) -> dict[str, Any]:

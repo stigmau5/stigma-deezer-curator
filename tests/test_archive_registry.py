@@ -2,6 +2,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from audio_division.album_integrity import album_integrity
+from audio_division.album_truth import album_truth
+from audio_division.album_workspace import album_workspace
+from audio_division.archive_audit import audit_album
 from audio_division.archive_registry import (
     album_entry,
     build_archive_registry,
@@ -11,7 +15,12 @@ from audio_division.archive_registry import (
     render_archive_registry_report,
     render_artifact_coverage_report,
 )
-from audio_division.artifacts import detect_album_artifacts, select_artwork_file
+from audio_division.artifacts import (
+    CANONICAL_ARTIFACT_TYPES,
+    detect_album_artifacts,
+    detect_artifacts,
+    select_artwork_file,
+)
 
 
 class ArchiveRegistryTests(unittest.TestCase):
@@ -89,6 +98,56 @@ class ArchiveRegistryTests(unittest.TestCase):
         self.assertEqual(selected.name, "cover.jpg")
         self.assertTrue(artifacts["artwork"])
         self.assertEqual(artifacts["artwork_name"], "cover.jpg")
+
+    def test_canonical_artifact_model_and_consumers_share_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            album = root / "A" / "artist" / "Albums" / "Artist-Album-2026-FLAC-STiGMA"
+            cd1 = album / "CD1"
+            cd1.mkdir(parents=True)
+            (album / "01.flac").write_text("audio")
+            (cd1 / "02.flac").write_text("audio")
+            (album / "release.nfo").write_text("nfo")
+            (album / "release.sfv").write_text("01.flac 1234ABCD\n")
+            (album / "playlist.m3u8").write_text("01.flac\nCD1/02.flac\n")
+            (album / "cover.jpg").write_text("art")
+            (album / "STIGMA_VALIDATED.txt").write_text("validated")
+
+            detected = detect_artifacts(album)
+            entry = album_entry(album, root)
+            truth = album_truth(
+                artist="artist",
+                album="Album",
+                archive_path=album,
+                registry_artifacts=entry["artifacts"],
+                metadata_state="CACHED",
+                identity_confidence="HIGH",
+                detected_artifacts=detected,
+            )
+            details = {
+                "artist": "artist",
+                "title": "Album",
+                "archive_path": str(album),
+                "album_truth": truth.to_dict(),
+                "album_status": truth.to_album_status(),
+                "archive_readiness": {"state": truth.readiness},
+                "artwork": {"local": "", "urls": {}},
+            }
+            integrity = album_integrity(details, detected)
+            workspace = album_workspace(details)
+            audit = audit_album(entry, root)
+
+        canonical = detected.to_canonical_dict()
+        self.assertEqual(tuple(canonical["artifacts"]), CANONICAL_ARTIFACT_TYPES)
+        self.assertTrue(all(canonical["artifacts"][name]["present"] for name in CANONICAL_ARTIFACT_TYPES))
+        self.assertEqual(detected.count("audio"), 2)
+        self.assertEqual(entry["track_count"], 2)
+        self.assertEqual(truth.readiness, "ARCHIVE_READY")
+        self.assertEqual(integrity["health_score"], 100)
+        self.assertEqual(workspace["cover"]["display"], "cover.jpg")
+        self.assertEqual(workspace["nfo"]["path"], str(detected.first_file("nfo")))
+        self.assertEqual(workspace["tracklist"]["path"], str(detected.first_file("playlist")))
+        self.assertEqual(audit["issues"], [])
 
     def test_registry_generation_and_reports(self):
         with tempfile.TemporaryDirectory() as tmp:

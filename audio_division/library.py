@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from audio_division.album_truth import album_truth, truth_summary as album_truth_summary
-from audio_division.artifacts import detect_album_artifacts
+from audio_division.artifacts import detect_artifacts
 from audio_division.archive_readiness import annotate_library_readiness
 from audio_division.dashboard import load_json
 from audio_division.lifecycle_state import attach_lifecycle_state
@@ -232,7 +232,8 @@ def _album_record(
     path_resolution = resolve_archive_path(identity, archive_root)
     archive_path_text = path_resolution.get("archive_path", "")
     archive_path = Path(archive_path_text) if archive_path_text else None
-    artifacts = detect_album_artifacts(archive_path) if archive_path else {}
+    detected = detect_artifacts(archive_path) if archive_path else None
+    artifacts = detected.to_dict() if detected else {}
     artist = _metadata_artist(metadata_album) or lifecycle_row.get("artist") or "(unknown)"
     title = metadata_album.get("title") or lifecycle_row.get("title") or "(unknown)"
     states = lifecycle_row.get("states", {})
@@ -249,6 +250,7 @@ def _album_record(
         metadata_state=metadata_detail["state"],
         metadata_album=metadata_album,
         identity_confidence=identity.get("identity_confidence", "UNKNOWN"),
+        detected_artifacts=detected,
     )
     status = truth.to_album_status()
     validation_status = "validated" if truth.validation.present else "not_validated"

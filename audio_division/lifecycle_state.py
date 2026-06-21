@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from audio_division.artifacts import detect_artifacts
 from curator.atomic import atomic_write_text
 
 STATE_DISCOVERED = "DISCOVERED"
@@ -295,8 +296,8 @@ def _validation_marker_path(folder: str, archive_path: str) -> Path | None:
     for path_text in (folder, archive_path):
         if not path_text:
             continue
-        marker = Path(path_text) / "STIGMA_VALIDATED.txt"
-        if marker.exists() and marker.is_file():
+        marker = detect_artifacts(path_text).first_file("validation")
+        if marker:
             return marker
     return None
 

@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import json
-import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from audio_division.artifacts import ARTIFACT_TYPES, detect_album_artifacts
+from audio_division.artifacts import (
+    ARTIFACT_TYPES,
+    AUDIO_SUFFIXES,
+    detect_artifacts,
+    is_disc_folder as artifact_is_disc_folder,
+)
 from curator.atomic import atomic_write_text
 
-AUDIO_SUFFIXES = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aiff"}
 ALBUM_CATEGORIES = {"Albums", "EPs", "Singles", "Live"}
-DISC_FOLDER_PATTERN = re.compile(r"^(cd|disc)[ _-]?\d+$", re.IGNORECASE)
 REGISTRY_SCHEMA = 1
 
 
@@ -34,8 +36,9 @@ def build_archive_registry(archive_root: Path) -> dict[str, Any]:
 
 
 def album_entry(album_path: Path, archive_root: Path) -> dict[str, Any]:
-    artifacts = detect_album_artifacts(album_path)
-    track_count = count_audio_tracks(album_path)
+    detected = detect_artifacts(album_path)
+    artifacts = detected.to_dict()
+    track_count = detected.count("audio")
     return {
         "name": album_path.name,
         "archive_path": str(album_path),
@@ -46,12 +49,7 @@ def album_entry(album_path: Path, archive_root: Path) -> dict[str, Any]:
 
 
 def count_audio_tracks(album_path: Path) -> int:
-    if not album_path.exists() or not album_path.is_dir():
-        return 0
-    total = count_direct_audio_tracks(album_path)
-    for folder in disc_folders(album_path):
-        total += count_direct_audio_tracks(folder)
-    return total
+    return detect_artifacts(album_path).count("audio")
 
 
 def archive_registry_summary(albums: list[dict[str, Any]]) -> dict[str, Any]:
@@ -138,19 +136,12 @@ def is_album_root(path: Path, archive_root: Path) -> bool:
 
 
 def has_album_evidence(path: Path) -> bool:
-    try:
-        children = list(path.iterdir())
-    except OSError:
-        return False
-    return (
-        count_direct_audio_tracks(path) > 0
-        or has_album_artifacts(path)
-        or any(child.is_dir() and is_disc_folder(child) and count_direct_audio_tracks(child) > 0 for child in children)
-    )
+    detected = detect_artifacts(path)
+    return bool(detected.direct_audio_files or any(detected.present(name) for name in ("nfo", "sfv", "playlist", "artwork", "validation")) or detected.count("audio"))
 
 
 def is_disc_folder(path: Path) -> bool:
-    return bool(DISC_FOLDER_PATTERN.match(path.name.strip()))
+    return artifact_is_disc_folder(path)
 
 
 def disc_folders(album_path: Path) -> list[Path]:
@@ -164,15 +155,12 @@ def disc_folders(album_path: Path) -> list[Path]:
 
 
 def count_direct_audio_tracks(path: Path) -> int:
-    try:
-        return sum(1 for item in path.iterdir() if item.is_file() and item.suffix.lower() in AUDIO_SUFFIXES)
-    except OSError:
-        return 0
+    return len(detect_artifacts(path).direct_audio_files)
 
 
 def has_album_artifacts(path: Path) -> bool:
-    artifacts = detect_album_artifacts(path)
-    return any(artifacts.get(name) for name in ARTIFACT_TYPES)
+    detected = detect_artifacts(path)
+    return any(detected.present(name) for name in ("nfo", "sfv", "playlist", "artwork", "validation"))
 
 
 def _relative(path: Path, root: Path) -> str:
