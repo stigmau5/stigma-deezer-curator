@@ -217,7 +217,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.hub_summary_labels: dict[str, ttk.Label] = {}
         self.hub_action_result_var = tk.StringVar(value="")
 
-        self.title("STiGMA Deezer Curator — v0.3.1")
+        self.title("STiGMA Archive Hub — v0.3.1")
         self.minsize(1100, 650)
         self.geometry(self._initial_window_geometry())
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -237,27 +237,28 @@ class DeezerCuratorGUI(tk.Tk):
         curator_tab = ttk.Frame(self.tabs)
         self.tabs.add(curator_tab, text="Curator")
 
-        audio_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(audio_tab, text="Audio Division")
-
         archive_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(archive_tab, text="Archive")
+        self.archive_tab = archive_tab
 
-        library_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(library_tab, text="Library")
-        self.library_tab = library_tab
-
-        artwork_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(artwork_tab, text="Artwork")
-
-        opportunities_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(opportunities_tab, text="Archive Opportunities (Secondary)")
-
-        hub_tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(hub_tab, text="Opportunities (Secondary)")
+        maintenance_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(maintenance_tab, text="Maintenance")
 
         settings_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(settings_tab, text="Settings")
+
+        self.archive_sections = ttk.Notebook(archive_tab)
+        self.archive_sections.pack(fill="both", expand=True)
+
+        physical_archive_tab = ttk.Frame(self.archive_sections, padding=6)
+        self.archive_sections.add(physical_archive_tab, text="Physical Archive")
+
+        library_tab = ttk.Frame(self.archive_sections, padding=6)
+        self.archive_sections.add(library_tab, text="Library")
+        self.library_tab = library_tab
+
+        artwork_tab = ttk.Frame(self.archive_sections, padding=6)
+        self.archive_sections.add(artwork_tab, text="Artwork")
 
         main = ttk.Panedwindow(curator_tab, orient="horizontal")
         main.pack(fill="both", expand=True)
@@ -355,12 +356,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.status = ttk.Label(bottom, text="Idle")
         self.status.pack(side="right")
 
-        self._build_audio_dashboard(audio_tab)
-        self._build_archive_tab(archive_tab)
+        self._build_archive_tab(physical_archive_tab)
         self._build_library_tab(library_tab)
         self._build_artwork_tab(artwork_tab)
-        self._build_opportunities_tab(opportunities_tab)
-        self._build_hub_opportunities_tab(hub_tab)
+        self._build_audio_dashboard(maintenance_tab)
         self._build_settings_tab(settings_tab)
 
     def _initial_window_geometry(self) -> str:
@@ -941,6 +940,7 @@ class DeezerCuratorGUI(tk.Tk):
     def _build_audio_dashboard(self, parent):
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Label(toolbar, text="Maintenance overview: validation, documentation, lifecycle, and audit work").pack(side="left")
         ttk.Button(toolbar, text="Refresh", command=self.refresh_audio_dashboard).pack(side="left")
 
         grid = ttk.Frame(parent)
@@ -1002,7 +1002,7 @@ class DeezerCuratorGUI(tk.Tk):
                 ("top_opportunities.archive_ready", "Archive Ready"),
                 ("top_opportunities.most_urgent_category", "Most Urgent"),
             ]),
-            ("Secondary: Archive Actions", [
+            ("Maintenance Actions", [
                 ("archive_actions.action_count", "Action Count"),
                 ("archive_actions.missing_nfo", "Missing NFO"),
                 ("archive_actions.missing_sfv", "Missing SFV"),
@@ -1011,7 +1011,7 @@ class DeezerCuratorGUI(tk.Tk):
                 ("archive_actions.missing_artwork", "Missing Artwork"),
                 ("archive_actions.identity_review", "Identity Review"),
             ]),
-            ("Archive Operations", [
+            ("Maintenance Tools", [
                 ("archive_operations.operation_count", "Operations"),
                 ("archive_operations.generate_nfo", "Generate NFO"),
                 ("archive_operations.generate_sfv", "Generate SFV"),
@@ -1036,13 +1036,13 @@ class DeezerCuratorGUI(tk.Tk):
                 frame.columnconfigure(1, weight=1)
                 self.dashboard_value_labels[key] = value
 
-        details = ttk.LabelFrame(parent, text="Action Details", padding=8)
+        details = ttk.LabelFrame(parent, text="Selected Maintenance Action", padding=8)
         details.pack(fill="x", pady=(10, 0))
         self.action_detail = tk.Text(details, height=4, wrap="word")
         self.action_detail.pack(fill="x")
         self.action_detail.config(state="disabled")
 
-        operations = ttk.LabelFrame(parent, text="Operation Test Controls", padding=8)
+        operations = ttk.LabelFrame(parent, text="Maintenance Tool Controls", padding=8)
         operations.pack(fill="x", pady=(10, 0))
         ttk.Label(operations, text="Target folder").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=2)
         ttk.Entry(operations, textvariable=self.operation_target_var).grid(row=0, column=1, sticky="ew", pady=2)
@@ -1064,32 +1064,41 @@ class DeezerCuratorGUI(tk.Tk):
         self.refresh_audio_dashboard()
 
     def _build_settings_tab(self, parent):
-        fields = [
-            ("archive_paths", "main_archive_root", "Main Archive Root"),
-            ("archive_paths", "incoming_root", "Incoming Root"),
-            ("archive_paths", "problematic_root", "Problematic Root"),
-            ("archive_paths", "needs_validation_root", "Needs Validation Root"),
-            ("validator", "validated_index_path", "Validated Index Path"),
-            ("validator", "validation_log_root", "Validation Log Root"),
-            ("metadata", "metadata_cache_path", "Metadata Cache Path"),
-            ("reports", "reports_directory", "Reports Directory"),
-            ("tools", "audio_division_path", "Audio Division Path"),
-            ("tools", "nfo_generator_path", "NFO Generator Path"),
-            ("tools", "sfv_generator_path", "SFV Generator Path"),
-            ("tools", "flac_validator_path", "FLAC Validator Path"),
-            ("tools", "file_manager_path", "File Manager Path"),
-            ("playback", "provider", "Player Provider"),
-            ("playback", "player_path", "Player Path"),
-            ("playback", "player_args", "Player Arguments"),
+        groups = [
+            ("Roots", [
+                ("archive_paths", "main_archive_root", "Main Archive Root"),
+                ("archive_paths", "incoming_root", "Incoming Root"),
+                ("archive_paths", "problematic_root", "Problematic Root"),
+                ("archive_paths", "needs_validation_root", "Needs Validation Root"),
+                ("validator", "validated_index_path", "Validated Index Path"),
+                ("validator", "validation_log_root", "Validation Log Root"),
+                ("metadata", "metadata_cache_path", "Metadata Cache Path"),
+                ("reports", "reports_directory", "Reports Directory"),
+            ]),
+            ("Tools", [
+                ("tools", "audio_division_path", "Audio Division Path"),
+                ("tools", "nfo_generator_path", "NFO Generator Path"),
+                ("tools", "sfv_generator_path", "SFV Generator Path"),
+                ("tools", "flac_validator_path", "FLAC Validator Path"),
+                ("tools", "file_manager_path", "File Manager Path"),
+            ]),
+            ("Providers", [
+                ("playback", "provider", "Player Provider"),
+                ("playback", "player_path", "Player Path"),
+                ("playback", "player_args", "Player Arguments"),
+            ]),
         ]
-        form = ttk.Frame(parent)
-        form.pack(fill="both", expand=True)
-        for row, (section, key, label) in enumerate(fields):
-            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
-            var = tk.StringVar(value=self.audio_settings.get(section, {}).get(key, ""))
-            ttk.Entry(form, textvariable=var).grid(row=row, column=1, sticky="ew", pady=4)
-            self.audio_setting_vars[(section, key)] = var
-        form.columnconfigure(1, weight=1)
+        sections = ttk.Notebook(parent)
+        sections.pack(fill="both", expand=True)
+        for title, fields in groups:
+            form = ttk.Frame(sections, padding=10)
+            sections.add(form, text=title)
+            for row, (section, key, label) in enumerate(fields):
+                ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
+                var = tk.StringVar(value=self.audio_settings.get(section, {}).get(key, ""))
+                ttk.Entry(form, textvariable=var).grid(row=row, column=1, sticky="ew", pady=4)
+                self.audio_setting_vars[(section, key)] = var
+            form.columnconfigure(1, weight=1)
 
         buttons = ttk.Frame(parent)
         buttons.pack(fill="x", pady=(10, 0))
@@ -1843,7 +1852,8 @@ class DeezerCuratorGUI(tk.Tk):
         if not details:
             self.artwork_status_var.set("Selected album is not available in Library data.")
             return
-        self.tabs.select(self.library_tab)
+        self.tabs.select(self.archive_tab)
+        self.archive_sections.select(self.library_tab)
         self.library_selected_album = details
         self.set_library_detail(details)
         self.artwork_status_var.set("Opened album details.")
@@ -1948,7 +1958,8 @@ class DeezerCuratorGUI(tk.Tk):
         if not details:
             self.status.config(text="Opportunity album is not available in Library data")
             return
-        self.tabs.select(self.library_tab)
+        self.tabs.select(self.archive_tab)
+        self.archive_sections.select(self.library_tab)
         artist_key = details.get("artist_key", "")
         for idx, row in enumerate(self.library_artist_rows):
             if row.get("artist_key") == artist_key:
@@ -2094,13 +2105,13 @@ class DeezerCuratorGUI(tk.Tk):
         for (section, key), var in self.audio_setting_vars.items():
             self.audio_settings.setdefault(section, {})[key] = var.get()
         save_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE, self.audio_settings)
-        self.status.config(text="Audio Division settings saved")
+        self.status.config(text="Hub settings saved")
 
     def reload_audio_settings(self):
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         for (section, key), var in self.audio_setting_vars.items():
             var.set(self.audio_settings.get(section, {}).get(key, ""))
-        self.status.config(text="Audio Division settings reloaded")
+        self.status.config(text="Hub settings reloaded")
 
     # ---------------- Sorting ----------------
 
