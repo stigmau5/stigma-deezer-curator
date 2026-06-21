@@ -11,12 +11,17 @@ The album is the primary unit. Curator, Archive, and Settings should all ask the
 Album Truth is derived in this order:
 
 1. Filesystem artifacts
-2. Validator evidence
-3. Archive Registry artifacts
-4. Metadata Cache
-5. Reports and UI
+2. Validated index evidence
+3. Identity Registry evidence
+4. Lifecycle Registry evidence
+5. Validator log evidence
+6. Archive Registry artifacts
+7. Metadata Cache
+8. Reports and UI
 
-Filesystem evidence wins. If an archive folder can be inspected and `STIGMA_VALIDATED.txt` is missing, validation is missing even if older lifecycle evidence says the album was validated.
+Filesystem evidence wins when it is positive. A local `STIGMA_VALIDATED.txt` marker is the strongest validation signal.
+
+Absence of a local validation marker is not enough to erase stronger historical validation evidence. AlbumTruth can still mark validation as present when the album is linked through `validated_albums.json`, Identity Registry, Lifecycle Registry, or validator logs. The source, confidence, and reason must be exposed so the UI can show how validation was determined.
 
 ## Artifact Rules
 
@@ -41,6 +46,10 @@ Audio Division generated files are treated as normal filesystem artifacts. The H
 - `sfv_present`
 - `playlist_present`
 - `validation_present`
+- `validation_status`
+- `validation_source`
+- `validation_confidence`
+- `validation_reason`
 - `metadata_status`
 - `identity_confidence`
 - `health`
@@ -64,7 +73,11 @@ The engine emits the existing `album_status` structure:
     "artwork": "Present",
     "metadata": "Present"
   },
-  "health_percent": 83
+  "health_percent": 83,
+  "validation_status": "Present",
+  "validation_source": "validated_index",
+  "validation_confidence": "HIGH",
+  "validation_reason": "Album ID is present in validated_albums.json."
 }
 ```
 

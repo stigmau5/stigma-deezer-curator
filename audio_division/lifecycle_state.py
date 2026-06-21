@@ -285,10 +285,9 @@ def _validation_sources(album: dict[str, Any]) -> list[str]:
         sources.append("validator_evidence")
     status_items = album.get("album_truth", {}).get("items", {}) or album.get("album_status", {}).get("items", {})
     status_sources = album.get("album_truth", {}).get("sources", {})
-    if status_items.get("validation") == "Present" and status_sources.get("validation") == "filesystem":
-        sources.append("archive_validation_marker")
-    elif status_items.get("validation") == "Present":
-        sources.append("album_truth")
+    validation_source = status_sources.get("validation")
+    if status_items.get("validation") == "Present" and validation_source:
+        sources.append(validation_source)
     return sources or ["validator_evidence"]
 
 

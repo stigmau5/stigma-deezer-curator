@@ -44,7 +44,7 @@ class AlbumIntegrityTests(unittest.TestCase):
             {
                 "album_status": {
                     "items": {"validation": "Present", "nfo": "Missing"},
-                    "truth_sources": {"validation": "validator_evidence", "nfo": "none"},
+                    "truth_sources": {"validation": "validated_index", "nfo": "none"},
                 }
             }
         )
@@ -54,6 +54,24 @@ class AlbumIntegrityTests(unittest.TestCase):
         self.assertEqual(checks["validation"]["source"], "Validated Index")
         self.assertEqual(checks["nfo"]["status"], "Missing")
         self.assertIn("Archive folder is unavailable", result["warnings"][0])
+
+    def test_albumtruth_validation_fallback_when_marker_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp)
+            result = album_integrity(
+                {
+                    "archive_path": str(album),
+                    "album_truth": {
+                        "items": {"validation": "Present"},
+                        "sources": {"validation": "validated_index"},
+                        "paths": {},
+                    },
+                }
+            )
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual(checks["validation"]["status"], "Present")
+        self.assertEqual(checks["validation"]["source"], "Validated Index")
 
 
 if __name__ == "__main__":

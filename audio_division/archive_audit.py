@@ -10,6 +10,13 @@ from typing import Any
 from audio_division.album_truth import album_truth
 from audio_division.archive_registry import count_audio_tracks, is_album_root
 from audio_division.artifacts import detect_album_artifacts
+from audio_division.physical_archive import archive_identity_for_row, build_identity_lookup
+from audio_division.validation_truth import (
+    merge_validation_evidence,
+    validation_evidence_from_identity_release,
+    validation_evidence_from_lifecycle_row,
+    validation_evidence_from_validated_index,
+)
 from curator.atomic import atomic_write_text
 
 
@@ -39,16 +46,40 @@ AUDIO_SUFFIXES = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aiff"}
 CRC_PATTERN = re.compile(r"^[0-9a-fA-F]{8}$")
 
 
-def audit_archive(archive_registry: dict[str, Any], archive_root: Path | None = None) -> dict[str, Any]:
+def audit_archive(
+    archive_registry: dict[str, Any],
+    archive_root: Path | None = None,
+    *,
+    identity_registry: dict[str, Any] | None = None,
+    lifecycle_registry: dict[str, Any] | None = None,
+    validated_index: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     archive_root = archive_root or Path(str(archive_registry.get("archive_root") or ""))
+    identity_registry = identity_registry if identity_registry is not None else load_default_json("identity_registry.json")
+    lifecycle_registry = lifecycle_registry if lifecycle_registry is not None else load_default_json("lifecycle_registry.json")
+    validated_index = validated_index if validated_index is not None else load_default_json("validated_albums.json")
+    identity_lookup = build_identity_lookup(identity_registry or {})
+    lifecycle_by_album_id = {
+        str(row.get("album_id")): row
+        for row in (lifecycle_registry or {}).get("albums", [])
+        if row.get("album_id")
+    }
     albums = []
     issues = []
     for row in archive_registry.get("albums", []):
-        album = audit_album(row, archive_root)
+        identity_release = archive_identity_for_row(row, identity_lookup)
+        album_id = identity_release.get("discovery_identity", {}).get("deezer_album_id", "")
+        validation_evidence = merge_validation_evidence(
+            validation_evidence_from_validated_index(album_id, validated_index),
+            validation_evidence_from_lifecycle_row(lifecycle_by_album_id.get(str(album_id))),
+            validation_evidence_from_identity_release(identity_release),
+        )
+        album = audit_album(row, archive_root, validation_evidence=validation_evidence)
         albums.append(album)
         issues.extend(album["issues"])
 
     issue_counts = Counter(issue["category"] for issue in issues)
+    validation_source_counts = Counter(album.get("validation_source") or "missing" for album in albums)
     warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
     error_count = sum(1 for issue in issues if issue["severity"] == "error")
     healthy_count = sum(1 for album in albums if not album["issues"])
@@ -62,12 +93,13 @@ def audit_archive(archive_registry: dict[str, Any], archive_root: Path | None = 
             "errors": error_count,
         },
         "issue_counts": dict(issue_counts),
+        "validation_source_counts": dict(validation_source_counts),
         "issues": issues,
         "albums": albums,
     }
 
 
-def audit_album(row: dict[str, Any], archive_root: Path) -> dict[str, Any]:
+def audit_album(row: dict[str, Any], archive_root: Path, validation_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
     path = Path(str(row.get("archive_path") or ""))
     artifacts = detect_album_artifacts(path)
     truth = album_truth(
@@ -75,6 +107,7 @@ def audit_album(row: dict[str, Any], archive_root: Path) -> dict[str, Any]:
         album=album_from_row(row),
         archive_path=path,
         registry_artifacts=artifacts,
+        validator_evidence=validation_evidence or {},
     )
     track_count = count_audio_tracks(path)
     issues: list[dict[str, Any]] = []
@@ -84,10 +117,16 @@ def audit_album(row: dict[str, Any], archive_root: Path) -> dict[str, Any]:
         "nfo": ("missing_nfo", "NFO is missing."),
         "sfv": ("missing_sfv", "SFV is missing."),
         "playlist": ("missing_playlist", "Playlist is missing."),
-        "validation_log": ("missing_validation", "Validation evidence is missing."),
+        "validation": ("missing_validation", "Validation evidence is missing."),
     }
     for artifact, (category, reason) in missing_checks.items():
-        if not artifacts.get(artifact):
+        if artifact == "validation":
+            present = truth.validation.present
+        else:
+            present = bool(artifacts.get(artifact))
+        if not present:
+            if artifact == "validation" and truth.validation.reason:
+                reason = truth.validation.reason
             issues.append(issue(row, category, reason, "warning"))
     if track_count == 0:
         issues.append(issue(row, "missing_audio", "No audio files were found in the album root or disc folders.", "warning"))
@@ -104,6 +143,10 @@ def audit_album(row: dict[str, Any], archive_root: Path) -> dict[str, Any]:
         "path": str(path),
         "track_count": track_count,
         "health": truth.health,
+        "validation_status": truth.validation_status,
+        "validation_source": truth.validation_source,
+        "validation_confidence": truth.validation_confidence,
+        "validation_reason": truth.validation_reason,
         "issues": issues,
     }
 
@@ -246,6 +289,13 @@ def render_archive_audit(report: dict[str, Any]) -> str:
     counts = report.get("issue_counts", {})
     for category, label in ISSUE_LABELS.items():
         lines.append(f"| {label} | {counts.get(category, 0)} |")
+    lines.extend(["", "## Validation Sources", "", "| Source | Albums |", "| --- | ---: |"])
+    validation_sources = report.get("validation_source_counts", {})
+    if validation_sources:
+        for source, count in sorted(validation_sources.items()):
+            lines.append(f"| {escape(source)} | {count} |")
+    else:
+        lines.append("| none | 0 |")
     lines.extend(["", "## Issues", "", "| Severity | Category | Artist | Album | Path | Reason |", "| --- | --- | --- | --- | --- | --- |"])
     issues = report.get("issues", [])
     if not issues:
@@ -264,6 +314,17 @@ def write_archive_audit(report: dict[str, Any], reports_dir: Path) -> None:
 
 
 def load_archive_registry(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_default_json(filename: str) -> dict[str, Any]:
+    path = Path(__file__).resolve().parents[1] / "data" / filename
     if not path.exists():
         return {}
     try:

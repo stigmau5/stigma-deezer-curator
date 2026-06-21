@@ -8,7 +8,7 @@ from audio_division.selection_state import archive_album_key, capture_archive_se
 
 
 class AlbumTruthTests(unittest.TestCase):
-    def test_filesystem_artifacts_win_over_validator_and_registry(self):
+    def test_filesystem_artifacts_do_not_mask_validation_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             album_dir = Path(tmp)
             (album_dir / "release.nfo").write_text("nfo")
@@ -21,7 +21,7 @@ class AlbumTruthTests(unittest.TestCase):
                     "sfv": True,
                     "playlist": True,
                     "artwork": True,
-                    "validation_log": True,
+                    "validation_log": False,
                 },
                 validator_evidence={"validation": True},
                 metadata_state="CACHED",
@@ -33,13 +33,56 @@ class AlbumTruthTests(unittest.TestCase):
         self.assertEqual(truth.nfo.status, "Present")
         self.assertTrue(truth.nfo_present)
         self.assertEqual(truth.nfo.source, "filesystem")
-        self.assertEqual(truth.validation.status, "Missing")
-        self.assertEqual(truth.validation.source, "filesystem")
+        self.assertEqual(truth.validation.status, "Present")
+        self.assertEqual(truth.validation.source, "validated_index")
+        self.assertEqual(truth.validation_confidence, "HIGH")
         self.assertEqual(truth.sfv.status, "Missing")
-        self.assertEqual(truth.health, 33)
-        self.assertEqual(truth.readiness, "NEEDS_VALIDATION")
+        self.assertEqual(truth.health, 50)
+        self.assertEqual(truth.readiness, "NEEDS_DOCUMENTATION")
         self.assertEqual(truth.processing_state, "PROCESSING")
         self.assertEqual(truth.source, "filesystem")
+
+    def test_archive_marker_wins_over_other_validation_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album_dir = Path(tmp)
+            (album_dir / "STIGMA_VALIDATED.txt").write_text("validated")
+            truth = album_truth(
+                archive_path=album_dir,
+                validator_evidence={
+                    "validated_index": True,
+                    "identity_registry": True,
+                    "lifecycle_registry": True,
+                    "validator_log": True,
+                    "validation_log_path": "/tmp/validator/STIGMA_VALIDATED.txt",
+                },
+            )
+
+        self.assertEqual(truth.validation.status, "Present")
+        self.assertEqual(truth.validation_source, "archive_marker")
+        self.assertEqual(truth.validation_confidence, "HIGH")
+
+    def test_validated_index_wins_over_registry_and_logs(self):
+        truth = album_truth(
+            validator_evidence={
+                "validated_index": True,
+                "identity_registry": True,
+                "lifecycle_registry": True,
+                "validator_log": True,
+                "validation_log_path": "/tmp/validator/STIGMA_VALIDATED.txt",
+            }
+        )
+
+        self.assertEqual(truth.validation_status, "Present")
+        self.assertEqual(truth.validation_source, "validated_index")
+        self.assertEqual(truth.validation_confidence, "HIGH")
+
+    def test_missing_validation_is_explicit(self):
+        truth = album_truth()
+
+        self.assertEqual(truth.validation_status, "Missing")
+        self.assertEqual(truth.validation_source, "missing")
+        self.assertEqual(truth.validation_confidence, "NONE")
+        self.assertEqual(truth.validation_reason, "No validation evidence found.")
 
     def test_validator_evidence_wins_when_filesystem_is_unavailable(self):
         truth = album_truth(
@@ -49,7 +92,7 @@ class AlbumTruthTests(unittest.TestCase):
         )
 
         self.assertEqual(truth.validation.status, "Present")
-        self.assertEqual(truth.validation.source, "validator_evidence")
+        self.assertEqual(truth.validation.source, "validated_index")
         self.assertEqual(truth.metadata.status, "Missing")
         self.assertEqual(truth.processing_state, "DISCOVERED")
 

@@ -88,6 +88,8 @@ def status_glance(status: dict[str, Any], readiness: dict[str, Any]) -> list[tup
     items = status.get("items", {})
     return [
         ("Validation", items.get("validation", "Unknown")),
+        ("Validation Source", status.get("validation_source", "missing")),
+        ("Validation Confidence", status.get("validation_confidence", "NONE")),
         ("NFO", items.get("nfo", "Unknown")),
         ("SFV", items.get("sfv", "Unknown")),
         ("Playlist", items.get("playlist", "Unknown")),

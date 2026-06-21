@@ -11,8 +11,17 @@ def main() -> None:
     settings = load_audio_division_settings(data_dir / "audio_division_settings.json")
     registry_path = data_dir / "archive_registry.json"
     registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {}
+    identity = json.loads((data_dir / "identity_registry.json").read_text(encoding="utf-8")) if (data_dir / "identity_registry.json").exists() else {}
+    lifecycle = json.loads((data_dir / "lifecycle_registry.json").read_text(encoding="utf-8")) if (data_dir / "lifecycle_registry.json").exists() else {}
+    validated = json.loads((data_dir / "validated_albums.json").read_text(encoding="utf-8")) if (data_dir / "validated_albums.json").exists() else {}
     archive_root = Path(registry.get("archive_root") or settings.get("archive_paths", {}).get("main_archive_root", ""))
-    report = audit_archive(registry, archive_root)
+    report = audit_archive(
+        registry,
+        archive_root,
+        identity_registry=identity,
+        lifecycle_registry=lifecycle,
+        validated_index=validated,
+    )
     reports_dir = Path(settings.get("reports", {}).get("reports_directory") or root / "reports")
     if not reports_dir.is_absolute():
         reports_dir = root / reports_dir

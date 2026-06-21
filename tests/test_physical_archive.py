@@ -183,6 +183,26 @@ class PhysicalArchiveTests(unittest.TestCase):
         self.assertEqual(album["metadata_status"], "AVAILABLE_NOT_CACHED")
         self.assertEqual(album["album_status"]["items"]["metadata"], "Missing")
 
+    def test_archive_album_uses_identity_validation_evidence(self):
+        row = self.registry_row()
+        row["artifacts"]["validation_log"] = False
+        identity = {
+            "releases": [
+                {
+                    "archive_identity": {"folder": "abba-arrival-1976-WEB-FLAC-STiGMA"},
+                    "discovery_identity": {"deezer_album_id": "1", "artist": "abba", "title": "arrival"},
+                    "identity_confidence": "HIGH",
+                    "validation": {"available": True, "validated_at": "2026-01-01T00:00:00"},
+                }
+            ]
+        }
+
+        album = build_archive_albums({"albums": [row]}, identity, {"albums": {}, "artists": {}, "tracks": {}})[0]
+
+        self.assertEqual(album["validation_status"], "validated")
+        self.assertEqual(album["validation_source"], "identity_registry")
+        self.assertEqual(album["album_truth"]["validation_confidence"], "HIGH")
+
 
 if __name__ == "__main__":
     unittest.main()

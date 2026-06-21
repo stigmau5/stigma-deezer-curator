@@ -122,7 +122,11 @@ def maintenance_reason(album: dict[str, Any], category_id: str, warnings: list[d
     if category_id == "archive_ready":
         return "Validation and documentation evidence are present."
     if category_id == "needs_validation":
-        return "Validation evidence is missing."
+        return (
+            album.get("album_truth", {}).get("validation_reason")
+            or album.get("album_status", {}).get("validation_reason")
+            or "Validation evidence is missing."
+        )
     if category_id == "needs_documentation":
         missing = [label for field, label in (("nfo", "NFO"), ("sfv", "SFV")) if _status(album, field) != "Present"]
         return f"Missing documentation: {', '.join(missing)}." if missing else "Documentation needs review."

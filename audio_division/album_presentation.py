@@ -37,6 +37,9 @@ def album_presentation(details: dict[str, Any]) -> dict[str, Any]:
         ],
         "archive_status": [
             ("Validation", status_items.get("validation", "Unknown")),
+            ("Validation source", status.get("validation_source", details.get("validation_source") or "")),
+            ("Validation confidence", status.get("validation_confidence", details.get("validation_confidence") or "")),
+            ("Validation reason", status.get("validation_reason", details.get("validation_reason") or "")),
             ("Documentation", _documentation_status(status_items)),
             ("Readiness", readiness.get("state", "UNKNOWN")),
             ("Health", f"{status.get('health_percent', 0)}%"),

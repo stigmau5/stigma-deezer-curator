@@ -10,6 +10,11 @@ from audio_division.archive_readiness import annotate_library_readiness
 from audio_division.dashboard import load_json
 from audio_division.lifecycle_state import attach_lifecycle_state
 from audio_division.metadata_status import album_metadata_status
+from audio_division.validation_truth import (
+    merge_validation_evidence,
+    validation_evidence_from_identity_release,
+    validation_evidence_from_lifecycle_row,
+)
 from curator.atomic import atomic_write_text
 
 
@@ -105,7 +110,12 @@ def album_status(details: dict[str, Any]) -> dict[str, Any]:
     truth = album_truth(
         archive_path=details.get("archive_path"),
         registry_artifacts=details.get("artifacts", {}),
-        validator_evidence={"validation": details.get("validation_status") == "validated"},
+        validator_evidence={
+            "validation": details.get("validation_status") == "validated",
+            "validation_source": details.get("validation_source") or "",
+            "validation_confidence": details.get("validation_confidence") or "",
+            "validation_reason": details.get("validation_reason") or "",
+        },
         metadata_state=details.get("metadata_status"),
     )
     return truth.to_album_status()
@@ -232,10 +242,10 @@ def _album_record(
         album=title,
         archive_path=archive_path,
         registry_artifacts=artifacts,
-        validator_evidence={
-            "validation": bool(states.get("validated")),
-            "validation_log_path": identity.get("validation", {}).get("validation_log_path", ""),
-        },
+        validator_evidence=merge_validation_evidence(
+            validation_evidence_from_lifecycle_row(lifecycle_row),
+            validation_evidence_from_identity_release(identity),
+        ),
         metadata_state=metadata_detail["state"],
         metadata_album=metadata_album,
         identity_confidence=identity.get("identity_confidence", "UNKNOWN"),
@@ -258,6 +268,9 @@ def _album_record(
         "lifecycle_state": lifecycle_row.get("highest_state"),
         "identity_confidence": identity.get("identity_confidence", "UNKNOWN"),
         "validation_status": validation_status,
+        "validation_source": truth.validation_source,
+        "validation_confidence": truth.validation_confidence,
+        "validation_reason": truth.validation_reason,
         "metadata_status": metadata_detail["state"],
         "metadata_detail": metadata_detail,
         "archive_folder": path_resolution["archive_folder"],

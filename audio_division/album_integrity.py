@@ -51,6 +51,17 @@ def artifact_check(
 ) -> dict[str, str]:
     artifact_key = artifact_key or field
     if filesystem_available:
+        if field == "validation" and not filesystem.get(artifact_key):
+            item_status = truth_item_status(field, truth, status)
+            if item_status == "Present":
+                source = truth_item_source(field, truth, status)
+                return {
+                    "id": field,
+                    "label": label_for(field),
+                    "status": item_status,
+                    "source": source_label(source),
+                    "path": truth_item_path(field, truth, status),
+                }
         present = bool(filesystem.get(artifact_key))
         return {
             "id": field,
@@ -138,7 +149,13 @@ def truth_item_path(field: str, truth: dict[str, Any], status: dict[str, Any]) -
 def source_label(source: str) -> str:
     labels = {
         "filesystem": "Filesystem",
-        "validator_evidence": "Validated Index",
+        "archive_marker": "Archive Marker",
+        "validated_index": "Validated Index",
+        "identity_registry": "Identity Registry",
+        "lifecycle_registry": "Lifecycle Registry",
+        "validator_log": "Validator Log",
+        "missing": "Missing",
+        "validator_evidence": "Validator Evidence",
         "archive_registry": "Archive Registry",
         "metadata_cache": "Metadata Cache",
         "none": "none",

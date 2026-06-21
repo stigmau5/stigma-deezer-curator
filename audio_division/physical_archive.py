@@ -9,6 +9,7 @@ from typing import Any
 from audio_division.album_truth import album_truth
 from audio_division.lifecycle_state import attach_lifecycle_state
 from audio_division.metadata_status import album_metadata_status
+from audio_division.validation_truth import validation_evidence_from_identity_release
 
 
 READINESS_STATES = ("ARCHIVE_READY", "NEEDS_VALIDATION", "NEEDS_DOCUMENTATION", "NEEDS_REVIEW", "UNKNOWN")
@@ -90,6 +91,7 @@ def project_archive_album(
         album=title,
         archive_path=row.get("archive_path"),
         registry_artifacts=artifacts,
+        validator_evidence=validation_evidence_from_identity_release(identity_release),
         metadata_state=metadata_detail["state"],
         metadata_album=metadata_album,
         identity_confidence=identity_release.get("identity_confidence", "UNKNOWN"),
@@ -112,6 +114,9 @@ def project_archive_album(
         "lifecycle_state": "ARCHIVED",
         "identity_confidence": identity_release.get("identity_confidence", "UNKNOWN"),
         "validation_status": "validated" if truth.validation.present else "not_validated",
+        "validation_source": truth.validation_source,
+        "validation_confidence": truth.validation_confidence,
+        "validation_reason": truth.validation_reason,
         "metadata_status": metadata_detail["state"],
         "metadata_detail": metadata_detail,
         "archive_folder": row.get("name", ""),

@@ -4,6 +4,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from audio_division.validation_truth import (
+    CONFIDENCE_HIGH,
+    CONFIDENCE_LOW,
+    CONFIDENCE_MEDIUM,
+    CONFIDENCE_NONE,
+    SOURCE_ARCHIVE_MARKER,
+    SOURCE_IDENTITY_REGISTRY,
+    SOURCE_LIFECYCLE_REGISTRY,
+    SOURCE_MISSING,
+    SOURCE_VALIDATED_INDEX,
+    SOURCE_VALIDATOR_LOG,
+    source_rank,
+)
+
 
 ARTIFACT_FIELDS = ("validation", "nfo", "sfv", "playlist", "artwork", "metadata")
 READINESS_STATES = ("ARCHIVE_READY", "NEEDS_VALIDATION", "NEEDS_DOCUMENTATION", "NEEDS_REVIEW", "UNKNOWN")
@@ -22,6 +36,7 @@ class TruthValue:
     source: str
     path: str = ""
     reason: str = ""
+    confidence: str = ""
 
     @property
     def present(self) -> bool:
@@ -51,6 +66,22 @@ class AlbumTruth:
         return self.validation.present
 
     @property
+    def validation_status(self) -> str:
+        return self.validation.status
+
+    @property
+    def validation_source(self) -> str:
+        return self.validation.source
+
+    @property
+    def validation_confidence(self) -> str:
+        return self.validation.confidence or CONFIDENCE_NONE
+
+    @property
+    def validation_reason(self) -> str:
+        return self.validation.reason
+
+    @property
     def nfo_present(self) -> bool:
         return self.nfo.present
 
@@ -75,7 +106,13 @@ class AlbumTruth:
             "items": items,
             "health_percent": self.health,
             "truth_sources": {field: getattr(self, field).source for field in ARTIFACT_FIELDS},
+            "truth_confidences": {field: getattr(self, field).confidence for field in ARTIFACT_FIELDS if getattr(self, field).confidence},
+            "truth_reasons": {field: getattr(self, field).reason for field in ARTIFACT_FIELDS if getattr(self, field).reason},
             "truth_paths": {field: getattr(self, field).path for field in ARTIFACT_FIELDS if getattr(self, field).path},
+            "validation_status": self.validation_status,
+            "validation_source": self.validation_source,
+            "validation_confidence": self.validation_confidence,
+            "validation_reason": self.validation_reason,
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -88,6 +125,10 @@ class AlbumTruth:
             "sfv_present": self.sfv_present,
             "playlist_present": self.playlist_present,
             "validation_present": self.validation_present,
+            "validation_status": self.validation_status,
+            "validation_source": self.validation_source,
+            "validation_confidence": self.validation_confidence,
+            "validation_reason": self.validation_reason,
             "metadata_status": self.metadata_status,
             "identity_confidence": self.identity_confidence,
             "health": self.health,
@@ -96,6 +137,8 @@ class AlbumTruth:
             "source": self.source,
             "items": self.status_items(),
             "sources": {field: getattr(self, field).source for field in ARTIFACT_FIELDS},
+            "confidences": {field: getattr(self, field).confidence for field in ARTIFACT_FIELDS if getattr(self, field).confidence},
+            "reasons": {field: getattr(self, field).reason for field in ARTIFACT_FIELDS if getattr(self, field).reason},
             "paths": {field: getattr(self, field).path for field in ARTIFACT_FIELDS if getattr(self, field).path},
         }
 
@@ -198,7 +241,17 @@ def processing_state_for(values: dict[str, TruthValue], archive_path: str = "") 
 
 def primary_source(values: dict[str, TruthValue]) -> str:
     sources = {value.source for value in values.values()}
-    for source in ("filesystem", "validator_evidence", "archive_registry", "metadata_cache"):
+    for source in (
+        "filesystem",
+        SOURCE_ARCHIVE_MARKER,
+        SOURCE_VALIDATED_INDEX,
+        SOURCE_IDENTITY_REGISTRY,
+        SOURCE_LIFECYCLE_REGISTRY,
+        SOURCE_VALIDATOR_LOG,
+        "validator_evidence",
+        "archive_registry",
+        "metadata_cache",
+    ):
         if source in sources:
             return source
     return "none"
@@ -213,7 +266,13 @@ def filesystem_artifacts(archive_path: str | Path | None) -> dict[str, TruthValu
     files = [item for item in path.iterdir() if item.is_file()]
     by_name = {item.name.lower(): item for item in files}
     return {
-        "validation": _file_truth(by_name.get("STIGMA_VALIDATED.txt".lower()), "filesystem"),
+        "validation": _file_truth(
+            by_name.get("STIGMA_VALIDATED.txt".lower()),
+            SOURCE_ARCHIVE_MARKER,
+            present_reason="Archive validation marker exists.",
+            missing_reason="Archive validation marker is missing.",
+            confidence=CONFIDENCE_HIGH,
+        ),
         "nfo": _first_truth(by_name, files, "filesystem", preferred=("release.nfo",), suffixes={".nfo"}),
         "sfv": _first_truth(by_name, files, "filesystem", preferred=("release.sfv",), suffixes={".sfv"}),
         "playlist": _first_truth(by_name, files, "filesystem", preferred=("playlist.m3u8",), suffixes=PLAYLIST_SUFFIXES),
@@ -238,16 +297,11 @@ def resolve_truth(
     if field == "metadata":
         return metadata_truth(metadata_state, metadata_album)
 
-    if field in filesystem:
+    if field in filesystem and field != "validation":
         return filesystem[field]
 
     if field == "validation":
-        validation = validator.get("validation")
-        if validation is not None:
-            return _bool_truth(bool(validation), "validator_evidence")
-        validation_path = validator.get("validation_log_path") or validator.get("path")
-        if validation_path:
-            return TruthValue(PRESENT, "validator_evidence", str(validation_path))
+        return validation_truth(filesystem, validator, registry)
 
     registry_key = "validation_log" if field == "validation" else field
     if registry_key in registry:
@@ -255,6 +309,78 @@ def resolve_truth(
         return _bool_truth(bool(registry.get(registry_key)), "archive_registry", str(path))
 
     return TruthValue(UNKNOWN, "none", reason="no_evidence")
+
+
+def validation_truth(
+    filesystem: dict[str, TruthValue],
+    validator: dict[str, Any],
+    registry: dict[str, Any],
+) -> TruthValue:
+    archive_marker = filesystem.get("validation")
+    if archive_marker and archive_marker.present:
+        return archive_marker
+
+    candidates: list[TruthValue] = []
+    if validator.get("validated_index"):
+        candidates.append(
+            TruthValue(
+                PRESENT,
+                SOURCE_VALIDATED_INDEX,
+                reason=validator.get("validation_reason") or "Album ID is present in validated_albums.json.",
+                confidence=validator.get("validation_confidence") or CONFIDENCE_HIGH,
+            )
+        )
+    if validator.get("identity_registry"):
+        candidates.append(
+            TruthValue(
+                PRESENT,
+                SOURCE_IDENTITY_REGISTRY,
+                str(validator.get("validation_log_path") or ""),
+                validator.get("validation_reason") or "Identity Registry contains validation evidence for this release.",
+                validator.get("validation_confidence") or CONFIDENCE_HIGH,
+            )
+        )
+    if validator.get("lifecycle_registry"):
+        candidates.append(
+            TruthValue(
+                PRESENT,
+                SOURCE_LIFECYCLE_REGISTRY,
+                str(validator.get("validation_log_path") or ""),
+                validator.get("validation_reason") or "Lifecycle Registry marks this album as validated.",
+                validator.get("validation_confidence") or CONFIDENCE_MEDIUM,
+            )
+        )
+    validation = validator.get("validation")
+    if validation is not None:
+        source = validator.get("validation_source") or SOURCE_VALIDATED_INDEX
+        confidence = validator.get("validation_confidence") or (CONFIDENCE_HIGH if bool(validation) else CONFIDENCE_NONE)
+        reason = validator.get("validation_reason") or (
+            "Validation evidence was supplied by caller." if bool(validation) else "Caller supplied missing validation evidence."
+        )
+        candidates.append(TruthValue(PRESENT if bool(validation) else MISSING, source, reason=reason, confidence=confidence))
+    validation_path = validator.get("validation_log_path") or validator.get("path")
+    if validator.get("validator_log") or validation_path:
+        candidates.append(
+            TruthValue(
+                PRESENT,
+                SOURCE_VALIDATOR_LOG,
+                str(validation_path or ""),
+                validator.get("validation_reason") or "Validator log evidence exists.",
+                validator.get("validation_confidence") or CONFIDENCE_LOW,
+            )
+        )
+
+    if registry.get("validation_log"):
+        path = registry.get("validation_log_path") or ""
+        candidates.append(TruthValue(PRESENT, SOURCE_ARCHIVE_MARKER, str(path), "Archive Registry detected validation marker.", CONFIDENCE_HIGH))
+
+    present_candidates = [candidate for candidate in candidates if candidate.present]
+    if present_candidates:
+        return sorted(present_candidates, key=lambda item: source_rank(item.source), reverse=True)[0]
+
+    if archive_marker:
+        return TruthValue(MISSING, SOURCE_MISSING, reason="No validation evidence found.", confidence=CONFIDENCE_NONE)
+    return TruthValue(MISSING, SOURCE_MISSING, reason="No validation evidence found.", confidence=CONFIDENCE_NONE)
 
 
 def metadata_truth(metadata_state: str | None, metadata_album: dict[str, Any] | None) -> TruthValue:
@@ -265,8 +391,17 @@ def metadata_truth(metadata_state: str | None, metadata_album: dict[str, Any] | 
     return TruthValue(UNKNOWN, "metadata_cache", reason=metadata_state or "unknown")
 
 
-def _file_truth(path: Path | None, source: str) -> TruthValue:
-    return TruthValue(PRESENT, source, str(path)) if path else TruthValue(MISSING, source)
+def _file_truth(
+    path: Path | None,
+    source: str,
+    *,
+    present_reason: str = "",
+    missing_reason: str = "",
+    confidence: str = "",
+) -> TruthValue:
+    if path:
+        return TruthValue(PRESENT, source, str(path), present_reason, confidence)
+    return TruthValue(MISSING, source, reason=missing_reason, confidence=CONFIDENCE_NONE if source == SOURCE_ARCHIVE_MARKER else confidence)
 
 
 def _first_truth(

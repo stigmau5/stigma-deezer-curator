@@ -53,6 +53,33 @@ class ArchiveAuditTests(unittest.TestCase):
         self.assertIn("missing_validation", categories)
         self.assertEqual(report["summary"]["errors"], 0)
 
+    def test_validation_evidence_can_come_from_identity_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            album = self.make_album(root)
+            (album / "01.flac").write_text("audio", encoding="utf-8")
+            (album / "cover.jpg").write_text("art", encoding="utf-8")
+            (album / "release.nfo").write_text("nfo", encoding="utf-8")
+            (album / "release.sfv").write_text("01.flac 1234ABCD\n", encoding="utf-8")
+            (album / "playlist.m3u8").write_text("01.flac\n", encoding="utf-8")
+            registry = {"archive_root": str(root), "albums": [album_entry(album, root)]}
+            identity = {
+                "releases": [
+                    {
+                        "archive_identity": {"folder": album.name},
+                        "discovery_identity": {"deezer_album_id": "123", "artist": "artist", "title": "album"},
+                        "identity_confidence": "HIGH",
+                        "validation": {"available": True, "validated_at": "2026-01-01T00:00:00"},
+                    }
+                ]
+            }
+
+            report = audit_archive(registry, root, identity_registry=identity)
+            categories = {issue["category"] for issue in report["issues"]}
+
+        self.assertNotIn("missing_validation", categories)
+        self.assertEqual(report["validation_source_counts"]["identity_registry"], 1)
+
     def test_playlist_and_sfv_reference_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
