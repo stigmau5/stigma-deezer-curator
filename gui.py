@@ -36,7 +36,9 @@ from audio_division.artwork_browser import artwork_items, filter_artwork_items
 from audio_division.cover_widget import CoverWidget
 from audio_division.physical_archive import (
     albums_for_archive_artist,
+    archive_letter_iid,
     archive_tree,
+    archive_tree_expansion,
     build_archive_albums,
     filter_archive_albums,
 )
@@ -489,6 +491,11 @@ class DeezerCuratorGUI(tk.Tk):
 
         tree_frame = ttk.LabelFrame(panes, text="Archive Tree", padding=4)
         panes.add(tree_frame, weight=1)
+        tree_toolbar = ttk.Frame(tree_frame)
+        tree_toolbar.pack(fill="x", pady=(0, 4))
+        ttk.Button(tree_toolbar, text="Expand All", command=lambda: self.set_archive_tree_expansion("expand_all")).pack(side="left")
+        ttk.Button(tree_toolbar, text="Collapse All", command=lambda: self.set_archive_tree_expansion("collapse_all")).pack(side="left", padx=(4, 0))
+        ttk.Button(tree_toolbar, text="Expand Artist", command=lambda: self.set_archive_tree_expansion("expand_artist")).pack(side="left", padx=(4, 0))
         self.archive_tree = ttk.Treeview(tree_frame, show="tree", selectmode="browse")
         self.archive_tree.pack(fill="both", expand=True)
         self.archive_tree.bind("<<TreeviewSelect>>", self.on_archive_artist_selected)
@@ -1245,6 +1252,14 @@ class DeezerCuratorGUI(tk.Tk):
     ):
         if not hasattr(self, "archive_tree"):
             return
+        if not restore_album_key and getattr(self, "archive_selected_album", {}):
+            selection = capture_archive_selection(
+                self.archive_selected_album,
+                album_yview=self.archive_album_tree.yview(),
+            )
+            restore_album_key = selection.album_key
+            restore_artist_key = selection.artist_key
+            restore_album_yview = selection.album_yview
         registry = load_json(DATA_DIR / "archive_registry.json")
         identity = load_json(DATA_DIR / "identity_registry.json")
         metadata = load_json(DATA_DIR / "metadata_cache.json")
@@ -1299,7 +1314,8 @@ class DeezerCuratorGUI(tk.Tk):
         for row in self.archive_artist_rows:
             letter = row.get("letter", "#")
             if letter not in letters:
-                letters[letter] = self.archive_tree.insert("", tk.END, text=letter, open=True)
+                letter_iid = archive_letter_iid(letter)
+                letters[letter] = self.archive_tree.insert("", tk.END, iid=letter_iid, text=letter, open=True)
             self.archive_tree.insert(
                 letters[letter],
                 tk.END,
@@ -1316,6 +1332,21 @@ class DeezerCuratorGUI(tk.Tk):
                 self._load_archive_artist_albums(restore_artist_key, restore_album_key, restore_album_yview)
                 return
         self.clear_archive_albums()
+
+    def set_archive_tree_expansion(self, mode: str):
+        selected_artist_key = ""
+        selection = self.archive_tree.selection()
+        if selection and str(selection[0]).startswith("artist:"):
+            selected_artist_key = str(selection[0]).split(":", 1)[1]
+        if not selected_artist_key:
+            selected_artist_key = str(getattr(self, "archive_selected_album", {}).get("artist_key") or "")
+        open_items = archive_tree_expansion(self.archive_artist_rows, mode, selected_artist_key)
+        for item in self.archive_tree.get_children(""):
+            self.archive_tree.item(item, open=item in open_items)
+        if mode != "collapse_all" and selected_artist_key:
+            artist_iid = f"artist:{selected_artist_key}"
+            if self.archive_tree.exists(artist_iid):
+                self.archive_tree.see(artist_iid)
 
     def clear_archive_albums(self):
         self.archive_album_rows = []

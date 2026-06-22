@@ -14,6 +14,7 @@ from audio_division.validation_truth import validation_evidence_from_identity_re
 
 READINESS_STATES = ("ARCHIVE_READY", "NEEDS_VALIDATION", "NEEDS_DOCUMENTATION", "NEEDS_REVIEW", "UNKNOWN")
 RELEASE_TAG_TOKENS = {"web", "flac", "stigma"}
+ARCHIVE_TREE_EXPANSION_MODES = ("expand_all", "collapse_all", "expand_artist")
 
 
 def build_archive_albums(
@@ -151,6 +152,28 @@ def archive_tree(albums: list[dict[str, Any]]) -> list[dict[str, Any]]:
         letter = first_letter(artist)
         rows.append({"letter": letter, "artist": artist, "artist_key": artist_key(artist), "album_count": len(grouped[artist])})
     return rows
+
+
+def archive_tree_expansion(
+    rows: list[dict[str, Any]],
+    mode: str,
+    selected_artist_key: str = "",
+) -> set[str]:
+    """Return stable tree item ids that should be open for a navigation action."""
+    if mode not in ARCHIVE_TREE_EXPANSION_MODES:
+        raise ValueError(f"Unknown archive tree expansion mode: {mode}")
+    if mode == "collapse_all":
+        return set()
+    if mode == "expand_all":
+        return {archive_letter_iid(row.get("letter", "#")) for row in rows}
+    for row in rows:
+        if row.get("artist_key") == selected_artist_key:
+            return {archive_letter_iid(row.get("letter", "#"))}
+    return set()
+
+
+def archive_letter_iid(letter: Any) -> str:
+    return f"letter:{str(letter or '#').upper()}"
 
 
 def albums_for_archive_artist(albums: list[dict[str, Any]], selected_artist_key: str) -> list[dict[str, Any]]:
