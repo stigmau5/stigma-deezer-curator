@@ -68,6 +68,7 @@ from audio_division.maintenance import (
     maintenance_operation_for_album,
     maintenance_summaries,
 )
+from audio_division.metadata_enrichment import rebuild_metadata_enrichment
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
     OPPORTUNITY_CATEGORIES,
@@ -469,6 +470,7 @@ class DeezerCuratorGUI(tk.Tk):
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Refresh", command=self.refresh_archive_browser).pack(side="left")
+        ttk.Button(toolbar, text="Refresh Metadata", command=self.refresh_archive_metadata).pack(side="left", padx=(6, 0))
         self.archive_audit_button = ttk.Button(toolbar, text="Run Audit", command=self.run_archive_audit)
         self.archive_audit_button.pack(side="left", padx=(6, 0))
         ttk.Label(toolbar, textvariable=self.archive_audit_status_var).pack(side="left", padx=(8, 0))
@@ -1252,6 +1254,31 @@ class DeezerCuratorGUI(tk.Tk):
             restore_album_key=restore_album_key,
             restore_artist_key=restore_artist_key,
             restore_album_yview=restore_album_yview,
+        )
+
+    def refresh_archive_metadata(self):
+        selection = capture_archive_selection(
+            getattr(self, "archive_selected_album", {}),
+            active_tab=self.tabs.select(),
+            album_yview=self.archive_album_tree.yview(),
+        )
+        reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
+        if not reports_dir.is_absolute():
+            reports_dir = BASE_DIR / reports_dir
+        try:
+            result = rebuild_metadata_enrichment(DATA_DIR, reports_dir)
+        except OSError as exc:
+            self.archive_operation_result_var.set(f"Metadata refresh failed: {exc}")
+            return
+        self.refresh_archive_browser(
+            restore_album_key=selection.album_key,
+            restore_artist_key=selection.artist_key,
+            restore_album_yview=selection.album_yview,
+        )
+        if selection.active_tab:
+            self.tabs.select(selection.active_tab)
+        self.archive_operation_result_var.set(
+            f"Metadata refreshed: {result['albums_enriched']}/{result['albums_evaluated']} albums enriched."
         )
 
     def apply_archive_filters(
