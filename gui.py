@@ -334,7 +334,7 @@ class DeezerCuratorGUI(tk.Tk):
         right = ttk.Frame(main, padding=6)
         main.add(right, weight=2)
 
-        ttk.Label(right, text="Acquisition Queue").pack(anchor="w")
+        ttk.Label(right, text="Acquisition Worklist").pack(anchor="w")
         queue_columns = ("state", "artist", "album", "type", "action")
         self.queue_tree = ttk.Treeview(
             right,
@@ -2391,7 +2391,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.selected_acquisition_release = release
         menu = tk.Menu(self, tearoff=False)
         menu.add_command(label="Acquire Album", command=lambda: self.select_release_for_acquisition(release))
-        menu.add_command(label="Add To Queue", command=lambda: self.queue_release_for_acquisition(release))
+        menu.add_command(label="Add To Worklist", command=lambda: self.queue_release_for_acquisition(release))
         menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(release.url))
         menu.add_command(label="Copy Link", command=lambda: self.copy_release_link(release))
         if release.archive_path:
@@ -2575,7 +2575,7 @@ class DeezerCuratorGUI(tk.Tk):
         if not row:
             return
         messagebox.showinfo(
-            "Queued Release",
+            "Acquisition Item",
             "\n".join(
                 [
                     f"Artist: {row.get('artist', '')}",
@@ -2583,7 +2583,7 @@ class DeezerCuratorGUI(tk.Tk):
                     f"Release Type: {row.get('release_type', '')}",
                     f"Deezer Album ID: {row.get('deezer_album_id', '')}",
                     f"URL: {row.get('url', '')}",
-                    f"Queued Time: {row.get('queued_time', '')}",
+                    f"Added Time: {row.get('queued_time', '')}",
                     f"Current State: {row.get('current_state', '')}",
                 ]
             ),
@@ -2595,7 +2595,7 @@ class DeezerCuratorGUI(tk.Tk):
             return
         menu = tk.Menu(self, tearoff=False)
         menu.add_command(label="Acquire Album", command=lambda: self.acquire_queue_album(row))
-        menu.add_command(label="Remove From Queue", command=lambda: self.remove_from_acquisition_queue(row))
+        menu.add_command(label="Remove From Worklist", command=lambda: self.remove_from_acquisition_queue(row))
         menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(row.get("url", "")))
         menu.add_command(label="Copy Link", command=lambda: self.copy_queue_link(row))
         menu.add_command(label="Open Incoming Folder", command=lambda: self.open_queue_incoming_folder(row))
