@@ -72,6 +72,12 @@ from audio_division.maintenance import (
     maintenance_summaries,
 )
 from audio_division.metadata_enrichment import rebuild_metadata_enrichment
+from audio_division.artist_model import (
+    load_artist_file,
+    release_line_map,
+    releases_for_section,
+    render_artist_text,
+)
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
     OPPORTUNITY_CATEGORIES,
@@ -164,6 +170,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.main_mode = "artist"  # artist | inbox
         self.sort_mode = "alphabetical"
+        self.current_artist_filename = None
+        self.current_artist_model = None
+        self.artist_release_lines = {}
 
         # Grep toggles
         self.include_live = tk.BooleanVar(value=True)
@@ -2264,6 +2273,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_mode = "inbox"
         self.main_label.config(text="Inbox")
         self.main_editor.config(state="normal")
+        self.current_artist_model = None
+        self.artist_release_lines = {}
         self.load_inbox()
 
     # ---------------- Artist ----------------
@@ -2279,18 +2290,44 @@ class DeezerCuratorGUI(tk.Tk):
         if not selection:
             return
 
-        filename = self.artist_list.get(selection[0])
-        path = ARTISTS_DIR / filename
+        self.current_artist_filename = self.artist_list.get(selection[0])
+        path = ARTISTS_DIR / self.current_artist_filename
 
         self.show_artist_mode()
         self.main_editor.config(state="normal")
         self.main_editor.delete("1.0", tk.END)
 
         if path.exists():
-            self.main_editor.insert(tk.END, path.read_text(encoding="utf-8"))
-            record_created(filename)
+            self.current_artist_model = load_artist_file(path, DATA_DIR)
+            self.artist_release_lines = release_line_map(self.current_artist_model)
+            self.main_editor.insert(tk.END, render_artist_text(self.current_artist_model))
+            record_created(self.current_artist_filename)
 
         self.main_editor.config(state="disabled")
+
+    def selected_artist_releases(self):
+        if not self.current_artist_model:
+            return []
+        try:
+            start = self.main_editor.index(tk.SEL_FIRST)
+            end = self.main_editor.index(tk.SEL_LAST)
+        except tk.TclError:
+            start = self.main_editor.index(tk.INSERT)
+            end = self.main_editor.index(f"{start.split('.')[0]}.end")
+
+        start_line = int(start.split(".")[0])
+        end_line = int(end.split(".")[0])
+        if end.endswith(".0") and end_line > start_line:
+            end_line -= 1
+        releases = []
+        seen = set()
+        for line_number in range(start_line, end_line + 1):
+            release = self.artist_release_lines.get(line_number)
+            if not release or release.deezer_album_id in seen:
+                continue
+            releases.append(release)
+            seen.add(release.deezer_album_id)
+        return releases
 
     # ---------------- Inbox ----------------
 
@@ -2308,33 +2345,20 @@ class DeezerCuratorGUI(tk.Tk):
     # ---------------- Grep helpers ----------------
 
     def grep_section(self, section_name: str):
-        if self.main_mode != "artist":
+        if self.main_mode != "artist" or not self.current_artist_model:
             messagebox.showwarning("No artist selected", "Open an artist file first.")
             return
 
-        lines = self.main_editor.get("1.0", tk.END).splitlines()
-        collecting = False
         found = []
 
-        header = f"# {section_name}"
-
-        for line in lines:
-            line = line.rstrip()
-
-            if line.startswith("# "):
-                collecting = line == header
+        for release in releases_for_section(self.current_artist_model, section_name):
+            if not self.include_live.get() and release.is_live:
                 continue
 
-            if not collecting or not line.startswith("http"):
+            if not self.include_compilations.get() and release.is_compilation:
                 continue
 
-            if not self.include_live.get() and "LIVE?" in line:
-                continue
-
-            if not self.include_compilations.get() and "COMPILATION" in line:
-                continue
-
-            found.append(line)
+            found.append(release)
 
         if not found:
             messagebox.showinfo(
@@ -2342,8 +2366,8 @@ class DeezerCuratorGUI(tk.Tk):
             )
             return
 
-        for entry in found:
-            self.custom_editor.insert(tk.END, entry + "\n")
+        for release in found:
+            self.custom_editor.insert(tk.END, release.source_line + "\n")
 
         self.status.config(text=f"Added {len(found)} {section_name} link(s)")
 
@@ -2353,17 +2377,8 @@ class DeezerCuratorGUI(tk.Tk):
         if self.main_mode != "artist":
             return
 
-        try:
-            text = self.main_editor.get(tk.SEL_FIRST, tk.SEL_LAST)
-        except tk.TclError:
-            index = self.main_editor.index(tk.INSERT)
-            text = self.main_editor.get(
-                f"{index.split('.')[0]}.0", f"{index.split('.')[0]}.end"
-            )
-
-        for line in text.splitlines():
-            if line.strip().startswith("http"):
-                self.custom_editor.insert(tk.END, line.strip() + "\n")
+        for release in self.selected_artist_releases():
+            self.custom_editor.insert(tk.END, release.source_line + "\n")
 
     def load_custom_queue(self):
         self.custom_editor.delete("1.0", tk.END)
