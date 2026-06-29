@@ -5,6 +5,7 @@ from typing import Any
 
 from audio_division.archive_audit import broken_playlist_references, broken_sfv_references
 from audio_division.artifacts import AlbumArtifacts, detect_artifacts
+from audio_division.revalidation import revalidate_album_details
 
 
 INTEGRITY_CHECKS = (
@@ -24,23 +25,7 @@ def album_integrity(
     archive_path = Path(str(details.get("archive_path") or "")) if details.get("archive_path") else None
     filesystem_available = bool(archive_path and archive_path.exists() and archive_path.is_dir())
     detected = detected_artifacts or (detect_artifacts(archive_path) if filesystem_available and archive_path else None)
-    filesystem = detected.to_dict() if detected else {}
-    truth = details.get("album_truth", {})
-    status = details.get("album_status", {})
-    checks = [
-        artifact_check("artwork", filesystem, truth, status, filesystem_available),
-        artifact_check("nfo", filesystem, truth, status, filesystem_available),
-        artifact_check("sfv", filesystem, truth, status, filesystem_available),
-        artifact_check("playlist", filesystem, truth, status, filesystem_available),
-        artifact_check("validation", filesystem, truth, status, filesystem_available, artifact_key="validation_log"),
-        audio_check(archive_path, filesystem_available, detected),
-    ]
-    warnings = integrity_warnings(checks, archive_path, filesystem_available, detected)
-    return {
-        "checks": checks,
-        "health_score": health_score(checks, warnings),
-        "warnings": warnings,
-    }
+    return revalidate_album_details(details, detected)
 
 
 def artifact_check(

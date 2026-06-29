@@ -25,6 +25,7 @@ from audio_division.operation_runner import run_operation
 from audio_division.playback import run_playback_action
 from audio_division.archive_reconciliation import reconcile_archive, write_archive_reconciliation_report
 from audio_division.archive_audit import audit_archive, write_archive_audit
+from audio_division.revalidation import revalidate_archive, write_archive_revalidation_report
 from audio_division.batch_operations import (
     available_batch_operations,
     collect_album_targets,
@@ -197,7 +198,9 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_album_var = tk.StringVar()
         self.archive_operation_result_var = tk.StringVar()
         self.archive_audit_status_var = tk.StringVar(value="")
+        self.archive_revalidation_status_var = tk.StringVar(value="")
         self._archive_audit_running = False
+        self._archive_revalidation_running = False
         self.archive_current_nfo: dict = {}
         self.library_current_nfo: dict = {}
         self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
@@ -475,7 +478,10 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(toolbar, text="Refresh Metadata", command=self.refresh_archive_metadata).pack(side="left", padx=(6, 0))
         self.archive_audit_button = ttk.Button(toolbar, text="Run Audit", command=self.run_archive_audit)
         self.archive_audit_button.pack(side="left", padx=(6, 0))
+        self.archive_revalidation_button = ttk.Button(toolbar, text="Revalidate Archive", command=self.run_archive_revalidation)
+        self.archive_revalidation_button.pack(side="left", padx=(6, 0))
         ttk.Label(toolbar, textvariable=self.archive_audit_status_var).pack(side="left", padx=(8, 0))
+        ttk.Label(toolbar, textvariable=self.archive_revalidation_status_var).pack(side="left", padx=(8, 0))
         ttk.Label(toolbar, text="Artist").pack(side="left", padx=(12, 4))
         artist_filter = ttk.Entry(toolbar, textvariable=self.archive_artist_var, width=24)
         artist_filter.pack(side="left")
@@ -1214,6 +1220,65 @@ class DeezerCuratorGUI(tk.Tk):
         except Exception as exc:
             message = f"Archive audit failed: {exc}"
         self.after(0, lambda message=message: self._set_archive_audit_running(False, message))
+
+    def run_archive_revalidation(self):
+        registry = load_json(DATA_DIR / "archive_registry.json")
+        archive_root_text = registry.get("archive_root") or self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
+        if not archive_root_text:
+            self.status.config(text="Archive revalidation failed: Main Archive Root is not configured")
+            return
+        archive_root = Path(archive_root_text)
+        reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
+        if not reports_dir.is_absolute():
+            reports_dir = BASE_DIR / reports_dir
+        if self._archive_revalidation_running:
+            return
+        self._set_archive_revalidation_running(True, "Archive revalidation running...")
+        thread = threading.Thread(
+            target=self._run_archive_revalidation_thread,
+            args=(registry, archive_root, reports_dir),
+            daemon=True,
+        )
+        thread.start()
+
+    def _set_archive_revalidation_running(self, running: bool, message: str):
+        self._archive_revalidation_running = running
+        state = "disabled" if running else "normal"
+        if hasattr(self, "archive_revalidation_button"):
+            self.archive_revalidation_button.config(state=state)
+        if hasattr(self, "archive_revalidation_status_var"):
+            self.archive_revalidation_status_var.set(message)
+        self.status.config(text=message)
+
+    def _run_archive_revalidation_thread(self, registry: dict, archive_root: Path, reports_dir: Path):
+        try:
+            def progress(current: int, total: int, row: dict):
+                if current == 1 or current == total or current % 25 == 0:
+                    message = f"Revalidating {current} / {total} albums..."
+                    self.after(0, lambda message=message: self.archive_revalidation_status_var.set(message))
+                    self.after(0, lambda message=message: self.status.config(text=message))
+
+            report = revalidate_archive(
+                registry,
+                archive_root,
+                identity_registry=load_json(DATA_DIR / "identity_registry.json"),
+                lifecycle_registry=load_json(DATA_DIR / "lifecycle_registry.json"),
+                validated_index=load_json(DATA_DIR / "validated_albums.json"),
+                progress=progress,
+            )
+            self.after(0, lambda: self.archive_revalidation_status_var.set("Writing archive revalidation report..."))
+            write_archive_revalidation_report(report, reports_dir)
+            summary = report.get("summary", {})
+            message = (
+                "Archive revalidation written: "
+                f"{summary.get('albums_scanned', 0)} scanned, "
+                f"{summary.get('healthy', 0)} healthy, "
+                f"{summary.get('warnings', 0)} warnings, "
+                f"{summary.get('errors', 0)} errors"
+            )
+        except Exception as exc:
+            message = f"Archive revalidation failed: {exc}"
+        self.after(0, lambda message=message: self._set_archive_revalidation_running(False, message))
 
     def refresh_library(self):
         try:
