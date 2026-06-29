@@ -80,8 +80,12 @@ from audio_division.acquisition_queue import (
     save_acquisition_queue,
 )
 from audio_division.artist_model import (
-    load_artist_file,
     release_line_map,
+)
+from audio_division.artist_presentation import (
+    load_artist_presentation,
+    load_artist_presentations,
+    sort_artist_presentations,
 )
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
@@ -170,6 +174,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.sort_mode = "alphabetical"
         self.current_artist_filename = None
         self.current_artist_model = None
+        self.current_artist_presentation = None
+        self.artist_presentations = []
         self.artist_release_lines = {}
         self.acquisition_rows = []
         self.selected_acquisition_release = None
@@ -2264,17 +2270,21 @@ class DeezerCuratorGUI(tk.Tk):
         self.refresh_artists()
 
     def get_sorted_artists(self):
-        files = [p.name for p in ARTISTS_DIR.glob("*.txt")]
-        meta = load_meta()["created"]
-        if self.sort_mode == "last_added":
-            return sorted(files, key=lambda f: meta.get(f, ""), reverse=True)
-        return sorted(files)
+        presentations = load_artist_presentations(ARTISTS_DIR, DATA_DIR)
+        return sort_artist_presentations(
+            presentations,
+            sort_mode=self.sort_mode,
+            created_meta=load_meta()["created"],
+        )
 
     # ---------------- Modes ----------------
 
     def show_artist_mode(self):
         self.main_mode = "artist"
-        self.main_label.config(text="Acquisition")
+        label = "Acquisition"
+        if self.current_artist_presentation:
+            label = f"Acquisition - {self.current_artist_presentation.display_name}"
+        self.main_label.config(text=label)
         self.main_editor.pack_forget()
         self.acquisition_tree.pack(fill="both", expand=True)
 
@@ -2283,6 +2293,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_label.config(text="Inbox")
         self.main_editor.config(state="normal")
         self.current_artist_model = None
+        self.current_artist_presentation = None
         self.artist_release_lines = {}
         self.selected_acquisition_release = None
         self.acquisition_tree.pack_forget()
@@ -2294,24 +2305,29 @@ class DeezerCuratorGUI(tk.Tk):
     def refresh_artists(self):
         ARTISTS_DIR.mkdir(parents=True, exist_ok=True)
         self.artist_list.delete(0, tk.END)
-        for name in self.get_sorted_artists():
-            self.artist_list.insert(tk.END, name)
+        self.artist_presentations = list(self.get_sorted_artists())
+        for presentation in self.artist_presentations:
+            self.artist_list.insert(tk.END, presentation.display_name)
 
     def open_selected_artist(self, event=None):
         selection = self.artist_list.curselection()
         if not selection:
             return
 
-        self.current_artist_filename = self.artist_list.get(selection[0])
-        path = ARTISTS_DIR / self.current_artist_filename
+        index = selection[0]
+        if index >= len(self.artist_presentations):
+            return
+        presentation = self.artist_presentations[index]
+        self.current_artist_presentation = presentation
+        self.current_artist_filename = presentation.projection_name
 
         self.show_artist_mode()
+        self.main_label.config(text=f"Acquisition - {presentation.display_name}")
 
-        if path.exists():
-            self.current_artist_model = load_artist_file(path, DATA_DIR)
-            self.artist_release_lines = release_line_map(self.current_artist_model)
-            self.render_acquisition_grid()
-            record_created(self.current_artist_filename)
+        self.current_artist_model = presentation.artist
+        self.artist_release_lines = release_line_map(self.current_artist_model)
+        self.render_acquisition_grid()
+        record_created(presentation.projection_name)
 
     def render_acquisition_grid(self):
         for item in self.acquisition_tree.get_children():
@@ -2435,7 +2451,7 @@ class DeezerCuratorGUI(tk.Tk):
                 [
                     f"Album: {release.title}",
                     f"Deezer album ID: {release.deezer_album_id}",
-                    f"Artist file: {self.current_artist_filename or ''}",
+                    f"Artist: {self.current_artist_model.artist_name if self.current_artist_model else ''}",
                     f"Identity confidence: {release.identity_confidence}",
                     f"Archive path: {release.archive_path or 'not archived'}",
                     f"Lifecycle: {release.lifecycle_state}",
@@ -2450,9 +2466,13 @@ class DeezerCuratorGUI(tk.Tk):
 
     def refresh_acquisition_metadata(self):
         self.refresh_archive_metadata()
-        if self.current_artist_filename:
-            path = ARTISTS_DIR / self.current_artist_filename
-            self.current_artist_model = load_artist_file(path, DATA_DIR)
+        if self.current_artist_presentation:
+            self.current_artist_presentation = load_artist_presentation(
+                self.current_artist_presentation.projection_path,
+                DATA_DIR,
+            )
+            self.current_artist_model = self.current_artist_presentation.artist
+            self.current_artist_filename = self.current_artist_presentation.projection_name
             self.artist_release_lines = release_line_map(self.current_artist_model)
             self.render_acquisition_grid()
 
@@ -2523,7 +2543,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.render_acquisition_queue()
 
     def add_release_to_acquisition_queue(self, release, *, persist: bool = True):
-        artist = self.current_artist_model.artist_name if self.current_artist_model else ""
+        artist = self.current_artist_presentation.display_name if self.current_artist_presentation else ""
         self.acquisition_queue = queue_release(self.acquisition_queue, release, artist=artist)
         if persist:
             self.persist_acquisition_queue()
