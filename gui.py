@@ -4,7 +4,6 @@ from pathlib import Path
 from datetime import datetime
 import subprocess
 import json
-import re
 import threading
 import webbrowser
 
@@ -83,7 +82,6 @@ from audio_division.acquisition_queue import (
 from audio_division.artist_model import (
     load_artist_file,
     release_line_map,
-    releases_for_section,
 )
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
@@ -104,7 +102,6 @@ DATA_DIR = BASE_DIR / "data"
 INBOX = DATA_DIR / "inbox.txt"
 LOG = DATA_DIR / "curated.log"
 ARTISTS_DIR = DATA_DIR / "artists"
-SHIPPED_DIR = DATA_DIR / "shipped"
 AUDIO_DIVISION_SETTINGS_FILE = DATA_DIR / "audio_division_settings.json"
 OPERATION_HISTORY_FILE = DATA_DIR / "operation_history.json"
 PROCESSING_QUEUE_FILE = DATA_DIR / "processing_queue.json"
@@ -178,10 +175,6 @@ class DeezerCuratorGUI(tk.Tk):
         self.selected_acquisition_release = None
         self.acquisition_queue = load_acquisition_queue(ACQUISITION_QUEUE_FILE)
         self.acquisition_queue_rows: list[dict] = []
-
-        # Grep toggles
-        self.include_live = tk.BooleanVar(value=True)
-        self.include_compilations = tk.BooleanVar(value=True)
 
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
@@ -333,7 +326,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.acquisition_tree.bind("<<TreeviewSelect>>", self.on_acquisition_selected)
         self.acquisition_tree.bind("<Double-1>", self.on_acquisition_double_click)
         self.acquisition_tree.bind("<Button-3>", self.show_acquisition_menu)
-        self.acquisition_tree.bind("<Control-Right>", lambda event: self.send_selected_link_to_queue())
+        self.acquisition_tree.bind("<Control-Right>", self.acquire_selected_release)
 
         self.main_editor = tk.Text(center, wrap="none")
 
@@ -366,49 +359,22 @@ class DeezerCuratorGUI(tk.Tk):
         bottom = ttk.Frame(curator_tab, padding=8)
         bottom.pack(fill="x")
 
-        ttk.Button(bottom, text="Show Artist", command=self.show_artist_mode).pack(
-            side="left", padx=4
-        )
-        ttk.Button(bottom, text="Show Inbox", command=self.show_inbox_mode).pack(
-            side="left", padx=4
-        )
-        ttk.Button(bottom, text="Save Inbox", command=self.save_inbox).pack(
-            side="left", padx=4
-        )
+        inbox_group = ttk.LabelFrame(bottom, text="Inbox", padding=(6, 3))
+        inbox_group.pack(side="left", padx=(0, 8))
+        ttk.Button(inbox_group, text="Show Inbox", command=self.show_inbox_mode).pack(side="left", padx=2)
+        ttk.Button(inbox_group, text="Show Artist", command=self.show_artist_mode).pack(side="left", padx=2)
+        ttk.Button(inbox_group, text="Save Inbox", command=self.save_inbox).pack(side="left", padx=2)
+        self.run_button = ttk.Button(inbox_group, text="Run Curator", command=self.run_from_inbox)
+        self.run_button.pack(side="left", padx=2)
 
-        ttk.Button(
-            bottom,
-            text="Queue selected album(s)",
-            command=self.send_selected_link_to_queue,
-        ).pack(side="left", padx=8)
+        acquire_group = ttk.LabelFrame(bottom, text="Acquire", padding=(6, 3))
+        acquire_group.pack(side="left", padx=(0, 8))
+        ttk.Button(acquire_group, text="Acquire Selected", command=self.acquire_selected_release).pack(side="left", padx=2)
 
-        ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
-
-        ttk.Button(
-            bottom, text="Queue Albums", command=lambda: self.grep_section("Albums")
-        ).pack(side="left", padx=2)
-        ttk.Button(
-            bottom, text="Queue EPs", command=lambda: self.grep_section("EPs")
-        ).pack(side="left", padx=2)
-        ttk.Button(
-            bottom, text="Queue Singles", command=lambda: self.grep_section("Singles")
-        ).pack(side="left", padx=2)
-
-        ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
-
-        ttk.Checkbutton(
-            bottom, text="Include Live", variable=self.include_live
-        ).pack(side="left")
-        ttk.Checkbutton(
-            bottom, text="Include Compilations", variable=self.include_compilations
-        ).pack(side="left")
-
-        ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
-
-        self.run_button = ttk.Button(
-            bottom, text="Run Curator (Inbox)", command=self.run_from_inbox
-        )
-        self.run_button.pack(side="left", padx=8)
+        tools_group = ttk.LabelFrame(bottom, text="Tools", padding=(6, 3))
+        tools_group.pack(side="left", padx=(0, 8))
+        ttk.Button(tools_group, text="Show Identity", command=self.show_selected_release_identity).pack(side="left", padx=2)
+        ttk.Button(tools_group, text="Copy Deezer Link", command=self.copy_selected_release_link).pack(side="left", padx=2)
 
         self.status = ttk.Label(bottom, text="Idle")
         self.status.pack(side="right")
@@ -2447,6 +2413,20 @@ class DeezerCuratorGUI(tk.Tk):
         self.clipboard_append(release.url)
         self.status.config(text="Copied Deezer link")
 
+    def copy_selected_release_link(self):
+        releases = self.selected_artist_releases()
+        if not releases:
+            self.status.config(text="Select a release first")
+            return
+        self.copy_release_link(releases[0])
+
+    def show_selected_release_identity(self):
+        releases = self.selected_artist_releases()
+        if not releases:
+            self.status.config(text="Select a release first")
+            return
+        self.show_release_identity(releases[0])
+
     def show_release_identity(self, release):
         recommendation = release.acquisition_recommendation
         messagebox.showinfo(
@@ -2520,41 +2500,11 @@ class DeezerCuratorGUI(tk.Tk):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         INBOX.write_text(self.main_editor.get("1.0", tk.END), encoding="utf-8")
 
-    # ---------------- Grep helpers ----------------
-
-    def grep_section(self, section_name: str):
-        if self.main_mode != "artist" or not self.current_artist_model:
-            messagebox.showwarning("No artist selected", "Open an artist file first.")
-            return
-
-        found = []
-
-        for release in releases_for_section(self.current_artist_model, section_name):
-            if not self.include_live.get() and release.is_live:
-                continue
-
-            if not self.include_compilations.get() and release.is_compilation:
-                continue
-
-            found.append(release)
-
-        if not found:
-            messagebox.showinfo(
-                "No matches", f"No matching links in section '{section_name}'."
-            )
-            return
-
-        for release in found:
-            self.add_release_to_acquisition_queue(release, persist=False)
-        self.persist_acquisition_queue()
-
-        self.status.config(text=f"Queued {len(found)} {section_name} album(s)")
-
     # ---------------- Queue helpers ----------------
 
-    def send_selected_link_to_queue(self):
+    def acquire_selected_release(self, event=None):
         if self.main_mode != "artist":
-            return
+            return "break"
 
         count = 0
         for release in self.selected_artist_releases():
@@ -2562,14 +2512,15 @@ class DeezerCuratorGUI(tk.Tk):
             count += 1
         self.persist_acquisition_queue()
         self.status.config(text=f"Queued {count} album(s)")
+        return "break"
+
+    def send_selected_link_to_queue(self, event=None):
+        # Deprecated: retained for older key bindings and external callbacks.
+        return self.acquire_selected_release(event)
 
     def load_custom_queue(self):
         self.acquisition_queue = load_acquisition_queue(ACQUISITION_QUEUE_FILE)
         self.render_acquisition_queue()
-
-    def send_to_streamrip(self):
-        self.persist_acquisition_queue()
-        self.status.config(text="Acquisition queue saved; downloading is not implemented.")
 
     def add_release_to_acquisition_queue(self, release, *, persist: bool = True):
         artist = self.current_artist_model.artist_name if self.current_artist_model else ""
