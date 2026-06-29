@@ -2519,14 +2519,29 @@ class DeezerCuratorGUI(tk.Tk):
             return
         self.selected_acquisition_release = release
         menu = tk.Menu(self, tearoff=False)
-        menu.add_command(label="Acquire Album", command=lambda: self.select_release_for_acquisition(release))
-        menu.add_command(label="Add To Worklist", command=lambda: self.queue_release_for_acquisition(release))
-        menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(release.url))
-        menu.add_command(label="Copy Link", command=lambda: self.copy_release_link(release))
-        if release.archive_path:
-            menu.add_command(label="Open Archive", command=lambda: self.open_release_archive_workspace(release))
-        menu.add_command(label="Show Identity", command=lambda: self.show_release_identity(release))
-        menu.add_command(label="Refresh Metadata", command=self.refresh_acquisition_metadata)
+        has_url = bool(release.url)
+        has_archive = bool(release.archive_path)
+        menu.add_command(
+            label="Acquire",
+            command=lambda: self.select_release_for_acquisition(release),
+            state=tk.NORMAL if has_url else tk.DISABLED,
+        )
+        menu.add_command(
+            label="Open Archive",
+            command=lambda: self.open_release_archive_workspace(release),
+            state=tk.NORMAL if has_archive else tk.DISABLED,
+        )
+        menu.add_command(
+            label="Open Deezer",
+            command=lambda: webbrowser.open(release.url),
+            state=tk.NORMAL if has_url else tk.DISABLED,
+        )
+        menu.add_command(label="View Identity", command=lambda: self.show_release_identity(release))
+        menu.add_command(
+            label="Copy Deezer Link",
+            command=lambda: self.copy_release_link(release),
+            state=tk.NORMAL if has_url else tk.DISABLED,
+        )
         menu.tk_popup(event.x_root, event.y_root)
 
     def select_release_for_acquisition(self, release):
