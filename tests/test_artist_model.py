@@ -159,6 +159,37 @@ class ArtistModelTests(unittest.TestCase):
         self.assertEqual(release.identity_confidence, "HIGH")
         self.assertEqual(release.album_truth["items"]["validation"], "Present")
         self.assertEqual(release.album_truth["items"]["metadata"], "Present")
+        self.assertEqual(release.acquisition_recommendation["recommendation"], "ARCHIVED")
+        self.assertIn("documentation", release.acquisition_recommendation["reason"])
+
+    def test_release_projection_exposes_incoming_recommendation(self):
+        text = "\n".join(
+            [
+                "# Artist: Example",
+                "# source: https://www.deezer.com/artist/123",
+                "# expanded_at: 2026-01-01 10:00",
+                "",
+                "# Albums",
+                "https://www.deezer.com/album/42  # ALBUM | Answer | 2024 | 10 tracks",
+            ]
+        )
+        artist = parse_artist_text(
+            text,
+            source_file=Path("Example.txt"),
+            metadata_cache={"albums": {"42": {"release_date": "2024-01-01"}}},
+            closed_loop_rows=[
+                {
+                    "artist": "Example",
+                    "album": "Answer",
+                    "folder": "/incoming/Example-Answer",
+                    "state": "DOWNLOADED",
+                }
+            ],
+        )
+
+        release = artist.albums[0]
+        self.assertEqual(release.acquisition_recommendation["recommendation"], "READY_FOR_VALIDATION")
+        self.assertEqual(release.acquisition_recommendation["next_action"], "Validate incoming album.")
 
 
 if __name__ == "__main__":

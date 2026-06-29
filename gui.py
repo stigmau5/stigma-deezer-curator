@@ -2337,12 +2337,16 @@ class DeezerCuratorGUI(tk.Tk):
         self.acquisition_rows = list(self.current_artist_model.releases) if self.current_artist_model else []
         self.selected_acquisition_release = None
         for index, release in enumerate(self.acquisition_rows):
+            recommendation = release.acquisition_recommendation.get(
+                "recommendation",
+                release.acquisition_status,
+            )
             self.acquisition_tree.insert(
                 "",
                 tk.END,
                 iid=str(index),
                 values=(
-                    release.acquisition_status,
+                    recommendation,
                     release.title,
                     release.year,
                     release.type,
@@ -2428,6 +2432,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.status.config(text="Copied Deezer link")
 
     def show_release_identity(self, release):
+        recommendation = release.acquisition_recommendation
         messagebox.showinfo(
             "Release Identity",
             "\n".join(
@@ -2440,6 +2445,9 @@ class DeezerCuratorGUI(tk.Tk):
                     f"Lifecycle: {release.lifecycle_state}",
                     f"Validation: {release.validation_status}",
                     f"Metadata: {release.metadata_status}",
+                    f"Recommendation: {recommendation.get('recommendation', 'UNKNOWN')}",
+                    f"Reason: {recommendation.get('reason', '')}",
+                    f"Next action: {recommendation.get('next_action', '')}",
                 ]
             ),
         )

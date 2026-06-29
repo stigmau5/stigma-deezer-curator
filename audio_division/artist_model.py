@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from audio_division.acquisition_intelligence import (
+    find_closed_loop_row,
+    find_processing_queue_entry,
+    recommend_acquisition,
+)
 from audio_division.album_truth import album_truth
+from audio_division.closed_loop_monitor import discover_incoming_albums
 from audio_division.metadata_status import album_metadata_status
 from audio_division.validation_truth import (
     merge_validation_evidence,
@@ -43,6 +49,7 @@ class Release:
     archive_path: str = ""
     identity_confidence: str = "UNKNOWN"
     album_truth: dict[str, Any] = field(default_factory=dict)
+    acquisition_recommendation: dict[str, str] = field(default_factory=dict)
     source_section: str = ""
     source_line_number: int = 0
     source_line: str = ""
@@ -75,14 +82,18 @@ class Artist:
 
 def load_artist_file(path: Path, data_dir: Path | None = None) -> Artist:
     data_dir = Path(data_dir) if data_dir else path.parent.parent
+    archive_registry = _load_json(data_dir / "archive_registry.json")
+    processing_queue = _load_json(data_dir / "processing_queue.json")
     return parse_artist_text(
         path.read_text(encoding="utf-8"),
         source_file=path,
         lifecycle_registry=_load_json(data_dir / "lifecycle_registry.json"),
         metadata_cache=_load_json(data_dir / "metadata_cache.json"),
         validated_index=_load_json(data_dir / "validated_albums.json"),
-        archive_registry=_load_json(data_dir / "archive_registry.json"),
+        archive_registry=archive_registry,
         identity_registry=_load_json(data_dir / "identity_registry.json"),
+        closed_loop_rows=_closed_loop_rows(data_dir, archive_registry, processing_queue),
+        processing_queue=processing_queue,
     )
 
 
@@ -95,12 +106,16 @@ def parse_artist_text(
     validated_index: dict[str, Any] | None = None,
     archive_registry: dict[str, Any] | None = None,
     identity_registry: dict[str, Any] | None = None,
+    closed_loop_rows: list[dict[str, Any]] | None = None,
+    processing_queue: dict[str, Any] | None = None,
 ) -> Artist:
     lifecycle_registry = lifecycle_registry or {}
     metadata_cache = metadata_cache or {}
     validated_index = validated_index or {}
     archive_registry = archive_registry or {}
     identity_registry = identity_registry or {}
+    closed_loop_rows = closed_loop_rows or []
+    processing_queue = processing_queue or {}
     lifecycle_by_id = _lifecycle_by_album_id(lifecycle_registry)
     identity_by_id = _identity_by_album_id(identity_registry)
     archive_by_folder = _archive_by_folder(archive_registry)
@@ -122,11 +137,14 @@ def parse_artist_text(
             stripped,
             source_section=current_section,
             source_line_number=line_number,
+            artist_name=artist_name,
             lifecycle_by_id=lifecycle_by_id,
             metadata_cache=metadata_cache,
             validated_index=validated_index,
             identity_by_id=identity_by_id,
             archive_by_folder=archive_by_folder,
+            closed_loop_rows=closed_loop_rows,
+            processing_queue=processing_queue,
         )
         if release:
             releases.append(release)
@@ -161,11 +179,14 @@ def parse_release_line(
     *,
     source_section: str,
     source_line_number: int,
+    artist_name: str = "",
     lifecycle_by_id: dict[str, dict[str, Any]] | None = None,
     metadata_cache: dict[str, Any] | None = None,
     validated_index: dict[str, Any] | None = None,
     identity_by_id: dict[str, dict[str, Any]] | None = None,
     archive_by_folder: dict[str, dict[str, Any]] | None = None,
+    closed_loop_rows: list[dict[str, Any]] | None = None,
+    processing_queue: dict[str, Any] | None = None,
 ) -> Release | None:
     url = line.split()[0]
     album_id = _album_id(url)
@@ -183,6 +204,8 @@ def parse_release_line(
     validated_index = validated_index or {}
     identity_by_id = identity_by_id or {}
     archive_by_folder = archive_by_folder or {}
+    closed_loop_rows = closed_loop_rows or []
+    processing_queue = processing_queue or {}
     lifecycle = lifecycle_by_id.get(album_id, {})
     identity_release = identity_by_id.get(album_id, {})
     archive_row = _archive_row_for_release(identity_release, archive_by_folder)
@@ -200,6 +223,34 @@ def parse_release_line(
     )
     lifecycle_state = str(lifecycle.get("highest_state") or "DISCOVERED")
     validation_status = _validation_status(album_id, lifecycle, validated_index, identity_release)
+    identity_artist = str(identity_release.get("discovery_identity", {}).get("artist") or artist_name)
+    closed_loop_row = find_closed_loop_row(
+        closed_loop_rows,
+        deezer_album_id=album_id,
+        artist=identity_artist,
+        title=title,
+        identity_release=identity_release,
+    )
+    queue_entry = find_processing_queue_entry(
+        processing_queue,
+        deezer_album_id=album_id,
+        archive_path=str(archive_row.get("archive_path") or ""),
+        artist=identity_artist,
+        title=title,
+        identity_release=identity_release,
+    )
+    recommendation = recommend_acquisition(
+        deezer_album_id=album_id,
+        title=title,
+        url=url,
+        lifecycle=lifecycle,
+        archive_row=archive_row,
+        closed_loop_row=closed_loop_row,
+        identity_release=identity_release,
+        album_truth=truth,
+        metadata_status=metadata_state,
+        processing_queue_entry=queue_entry,
+    ).to_dict()
     return Release(
         deezer_album_id=album_id,
         title=title,
@@ -217,10 +268,12 @@ def parse_release_line(
             metadata_status=metadata_state,
             identity_release=identity_release,
             truth=truth,
+            recommendation=recommendation,
         ),
         archive_path=str(archive_row.get("archive_path") or ""),
         identity_confidence=str(identity_release.get("identity_confidence") or "UNKNOWN"),
         album_truth=truth,
+        acquisition_recommendation=recommendation,
         source_section=source_section,
         source_line_number=source_line_number,
         source_line=line,
@@ -403,7 +456,21 @@ def _acquisition_status(
     metadata_status: str,
     identity_release: dict[str, Any],
     truth: dict[str, Any],
+    recommendation: dict[str, str] | None = None,
 ) -> str:
+    if recommendation:
+        labels = {
+            "ARCHIVED": "Archived",
+            "READY_TO_ACQUIRE": "Needs Download",
+            "ALREADY_DOWNLOADED": "Downloaded",
+            "READY_FOR_VALIDATION": "Downloaded",
+            "READY_FOR_PROCESSING": "Validated",
+            "ALREADY_PROCESSING": "Processing",
+            "NEEDS_METADATA": "Needs Metadata",
+            "IDENTITY_REVIEW": "Needs Review",
+            "UNKNOWN": "Needs Review",
+        }
+        return labels.get(recommendation.get("recommendation", ""), "Needs Review")
     if archive_row.get("archive_path"):
         return "Archived"
     states = lifecycle.get("states") if isinstance(lifecycle.get("states"), dict) else {}
@@ -433,3 +500,17 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _closed_loop_rows(
+    data_dir: Path,
+    archive_registry: dict[str, Any],
+    processing_queue: dict[str, Any],
+) -> list[dict[str, Any]]:
+    settings = _load_json(data_dir / "audio_division_settings.json")
+    if not settings.get("archive_paths", {}).get("incoming_root"):
+        return []
+    try:
+        return discover_incoming_albums(settings, archive_registry.get("albums", []), processing_queue)
+    except Exception:
+        return []
