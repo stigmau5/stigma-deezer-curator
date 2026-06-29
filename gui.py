@@ -73,6 +73,13 @@ from audio_division.maintenance import (
     maintenance_summaries,
 )
 from audio_division.metadata_enrichment import rebuild_metadata_enrichment
+from audio_division.acquisition_queue import (
+    load_acquisition_queue,
+    queue_release,
+    queue_rows,
+    remove_queue_item,
+    save_acquisition_queue,
+)
 from audio_division.artist_model import (
     load_artist_file,
     release_line_map,
@@ -101,14 +108,8 @@ SHIPPED_DIR = DATA_DIR / "shipped"
 AUDIO_DIVISION_SETTINGS_FILE = DATA_DIR / "audio_division_settings.json"
 OPERATION_HISTORY_FILE = DATA_DIR / "operation_history.json"
 PROCESSING_QUEUE_FILE = DATA_DIR / "processing_queue.json"
+ACQUISITION_QUEUE_FILE = DATA_DIR / "acquisition_queue.json"
 META_FILE = DATA_DIR / "artist_meta.json"
-
-STREAMRIP_BIN = Path(
-    "/home/stigma/Dokument/projekt/streamrip/.venv/bin/rip"
-)
-STREAMRIP_QUEUE = Path(
-    "/home/stigma/Dokument/projekt/streamrip/download_que.txt"
-)
 
 # ---------------- Metadata helpers ----------------
 
@@ -175,6 +176,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.artist_release_lines = {}
         self.acquisition_rows = []
         self.selected_acquisition_release = None
+        self.acquisition_queue = load_acquisition_queue(ACQUISITION_QUEUE_FILE)
+        self.acquisition_queue_rows: list[dict] = []
 
         # Grep toggles
         self.include_live = tk.BooleanVar(value=True)
@@ -338,9 +341,26 @@ class DeezerCuratorGUI(tk.Tk):
         right = ttk.Frame(main, padding=6)
         main.add(right, weight=2)
 
-        ttk.Label(right, text="Streamrip queue").pack(anchor="w")
-        self.custom_editor = tk.Text(right, wrap="none")
-        self.custom_editor.pack(fill="both", expand=True)
+        ttk.Label(right, text="Acquisition Queue").pack(anchor="w")
+        queue_columns = ("state", "artist", "album", "type", "action")
+        self.queue_tree = ttk.Treeview(
+            right,
+            columns=queue_columns,
+            show="headings",
+            selectmode="extended",
+        )
+        for column, title, width in (
+            ("state", "State", 135),
+            ("artist", "Artist", 170),
+            ("album", "Album", 260),
+            ("type", "Type", 80),
+            ("action", "Action", 140),
+        ):
+            self.queue_tree.heading(column, text=title)
+            self.queue_tree.column(column, width=width, anchor="w")
+        self.queue_tree.pack(fill="both", expand=True)
+        self.queue_tree.bind("<Double-1>", self.show_queue_release)
+        self.queue_tree.bind("<Button-3>", self.show_queue_menu)
 
         # ===== BOTTOM =====
         bottom = ttk.Frame(curator_tab, padding=8)
@@ -358,20 +378,20 @@ class DeezerCuratorGUI(tk.Tk):
 
         ttk.Button(
             bottom,
-            text="Send selected link(s)",
+            text="Queue selected album(s)",
             command=self.send_selected_link_to_queue,
         ).pack(side="left", padx=8)
 
         ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
 
         ttk.Button(
-            bottom, text="Send Albums", command=lambda: self.grep_section("Albums")
+            bottom, text="Queue Albums", command=lambda: self.grep_section("Albums")
         ).pack(side="left", padx=2)
         ttk.Button(
-            bottom, text="Send EPs", command=lambda: self.grep_section("EPs")
+            bottom, text="Queue EPs", command=lambda: self.grep_section("EPs")
         ).pack(side="left", padx=2)
         ttk.Button(
-            bottom, text="Send Singles", command=lambda: self.grep_section("Singles")
+            bottom, text="Queue Singles", command=lambda: self.grep_section("Singles")
         ).pack(side="left", padx=2)
 
         ttk.Separator(bottom, orient="vertical").pack(side="left", fill="y", padx=6)
@@ -389,10 +409,6 @@ class DeezerCuratorGUI(tk.Tk):
             bottom, text="Run Curator (Inbox)", command=self.run_from_inbox
         )
         self.run_button.pack(side="left", padx=8)
-
-        ttk.Button(
-            bottom, text="Send to streamrip", command=self.send_to_streamrip
-        ).pack(side="left", padx=8)
 
         self.status = ttk.Label(bottom, text="Idle")
         self.status.pack(side="right")
@@ -2408,8 +2424,8 @@ class DeezerCuratorGUI(tk.Tk):
             return
         self.selected_acquisition_release = release
         menu = tk.Menu(self, tearoff=False)
-        menu.add_command(label="Download", command=lambda: self.select_release_for_acquisition(release))
-        menu.add_command(label="Download + Queue", command=lambda: self.queue_release_for_acquisition(release))
+        menu.add_command(label="Acquire Album", command=lambda: self.select_release_for_acquisition(release))
+        menu.add_command(label="Add To Queue", command=lambda: self.queue_release_for_acquisition(release))
         menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(release.url))
         menu.add_command(label="Copy Link", command=lambda: self.copy_release_link(release))
         if release.archive_path:
@@ -2423,7 +2439,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.status.config(text=f"Selected for acquisition: {release.title}")
 
     def queue_release_for_acquisition(self, release):
-        self.custom_editor.insert(tk.END, release.url + "\n")
+        self.add_release_to_acquisition_queue(release)
         self.status.config(text=f"Queued for acquisition: {release.title}")
 
     def copy_release_link(self, release):
@@ -2529,9 +2545,10 @@ class DeezerCuratorGUI(tk.Tk):
             return
 
         for release in found:
-            self.custom_editor.insert(tk.END, release.source_line + "\n")
+            self.add_release_to_acquisition_queue(release, persist=False)
+        self.persist_acquisition_queue()
 
-        self.status.config(text=f"Added {len(found)} {section_name} link(s)")
+        self.status.config(text=f"Queued {len(found)} {section_name} album(s)")
 
     # ---------------- Queue helpers ----------------
 
@@ -2539,50 +2556,123 @@ class DeezerCuratorGUI(tk.Tk):
         if self.main_mode != "artist":
             return
 
+        count = 0
         for release in self.selected_artist_releases():
-            self.custom_editor.insert(tk.END, release.source_line + "\n")
+            self.add_release_to_acquisition_queue(release, persist=False)
+            count += 1
+        self.persist_acquisition_queue()
+        self.status.config(text=f"Queued {count} album(s)")
 
     def load_custom_queue(self):
-        self.custom_editor.delete("1.0", tk.END)
-        if STREAMRIP_QUEUE.exists():
-            self.custom_editor.insert(tk.END, STREAMRIP_QUEUE.read_text())
+        self.acquisition_queue = load_acquisition_queue(ACQUISITION_QUEUE_FILE)
+        self.render_acquisition_queue()
 
     def send_to_streamrip(self):
-        raw_text = self.custom_editor.get("1.0", tk.END)
+        self.persist_acquisition_queue()
+        self.status.config(text="Acquisition queue saved; downloading is not implemented.")
 
-        links = []
-        for line in raw_text.splitlines():
-            line = line.strip()
-            if not line.startswith("http"):
-                continue
-            links.append(line.split()[0])
+    def add_release_to_acquisition_queue(self, release, *, persist: bool = True):
+        artist = self.current_artist_model.artist_name if self.current_artist_model else ""
+        self.acquisition_queue = queue_release(self.acquisition_queue, release, artist=artist)
+        if persist:
+            self.persist_acquisition_queue()
 
-        if not links:
-            messagebox.showwarning(
-                "No links", "No valid URLs found to send to streamrip."
+    def persist_acquisition_queue(self):
+        save_acquisition_queue(ACQUISITION_QUEUE_FILE, self.acquisition_queue)
+        self.render_acquisition_queue()
+
+    def render_acquisition_queue(self):
+        for item in self.queue_tree.get_children():
+            self.queue_tree.delete(item)
+        self.acquisition_queue_rows = queue_rows(self.acquisition_queue)
+        for index, row in enumerate(self.acquisition_queue_rows):
+            self.queue_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(
+                    row.get("current_state", ""),
+                    row.get("artist", ""),
+                    row.get("album", ""),
+                    row.get("release_type", ""),
+                    row.get("action", ""),
+                ),
             )
+
+    def selected_queue_rows(self) -> list[dict]:
+        rows = []
+        for iid in self.queue_tree.selection():
+            index = int(iid)
+            if index < len(self.acquisition_queue_rows):
+                rows.append(self.acquisition_queue_rows[index])
+        return rows
+
+    def queue_row_from_event(self, event):
+        if not event:
+            return None
+        iid = self.queue_tree.identify_row(event.y)
+        if not iid:
+            return None
+        self.queue_tree.selection_set(iid)
+        index = int(iid)
+        if index >= len(self.acquisition_queue_rows):
+            return None
+        return self.acquisition_queue_rows[index]
+
+    def show_queue_release(self, event=None):
+        row = self.queue_row_from_event(event) if event else (self.selected_queue_rows()[0] if self.selected_queue_rows() else None)
+        if not row:
             return
-
-        STREAMRIP_QUEUE.write_text("\n".join(links) + "\n", encoding="utf-8")
-
-        SHIPPED_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        archive = SHIPPED_DIR / f"{ts}_{len(links)}links_download_que.txt"
-        archive.write_text("\n".join(links) + "\n", encoding="utf-8")
-
-        subprocess.Popen(
-            [
-                "x-terminal-emulator",
-                "-e",
-                str(STREAMRIP_BIN),
-                "file",
-                str(STREAMRIP_QUEUE),
-            ]
+        messagebox.showinfo(
+            "Queued Release",
+            "\n".join(
+                [
+                    f"Artist: {row.get('artist', '')}",
+                    f"Album: {row.get('album', '')}",
+                    f"Release Type: {row.get('release_type', '')}",
+                    f"Deezer Album ID: {row.get('deezer_album_id', '')}",
+                    f"URL: {row.get('url', '')}",
+                    f"Queued Time: {row.get('queued_time', '')}",
+                    f"Current State: {row.get('current_state', '')}",
+                ]
+            ),
         )
 
-        self.status.config(
-            text=f"Sent {len(links)} links • archived as {archive.name}"
-        )
+    def show_queue_menu(self, event):
+        row = self.queue_row_from_event(event)
+        if not row:
+            return
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="Acquire Album", command=lambda: self.acquire_queue_album(row))
+        menu.add_command(label="Remove From Queue", command=lambda: self.remove_from_acquisition_queue(row))
+        menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(row.get("url", "")))
+        menu.add_command(label="Copy Link", command=lambda: self.copy_queue_link(row))
+        menu.add_command(label="Open Incoming Folder", command=lambda: self.open_queue_incoming_folder(row))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def acquire_queue_album(self, row: dict):
+        self.status.config(text=f"Managed only: {row.get('artist', '')} - {row.get('album', '')}")
+
+    def remove_from_acquisition_queue(self, row: dict):
+        self.acquisition_queue = remove_queue_item(self.acquisition_queue, row.get("key", ""))
+        self.persist_acquisition_queue()
+        self.status.config(text="Removed album from acquisition queue")
+
+    def copy_queue_link(self, row: dict):
+        self.clipboard_clear()
+        self.clipboard_append(row.get("url", ""))
+        self.status.config(text="Copied queued Deezer link")
+
+    def open_queue_incoming_folder(self, row: dict):
+        folder = row.get("incoming_folder", "")
+        if not folder:
+            self.status.config(text="No incoming folder recorded for queue item")
+            return
+        path = Path(folder)
+        if not path.exists():
+            self.status.config(text="Incoming folder does not exist")
+            return
+        subprocess.Popen(["xdg-open", str(path)])
 
     # ---------------- Curator (threaded) ----------------
 
