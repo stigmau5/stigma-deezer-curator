@@ -179,6 +179,9 @@ class DeezerCuratorGUI(tk.Tk):
         self.artist_release_lines = {}
         self.acquisition_rows = []
         self.selected_acquisition_release = None
+        self.selected_acquisition_release_id = ""
+        self.acquisition_sort_column = ""
+        self.acquisition_sort_reverse = False
         self.acquisition_queue = load_acquisition_queue(ACQUISITION_QUEUE_FILE)
         self.acquisition_queue_rows: list[dict] = []
 
@@ -309,7 +312,17 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_label = ttk.Label(center, text="Acquisition")
         self.main_label.pack(anchor="w")
 
-        columns = ("status", "album", "year", "type", "archive", "lifecycle", "validation", "metadata")
+        columns = (
+            "status",
+            "album",
+            "year",
+            "type",
+            "archive",
+            "lifecycle",
+            "validation",
+            "metadata",
+            "identity",
+        )
         self.acquisition_tree = ttk.Treeview(
             center,
             columns=columns,
@@ -325,14 +338,22 @@ class DeezerCuratorGUI(tk.Tk):
             ("lifecycle", "Lifecycle", 110),
             ("validation", "Validation", 110),
             ("metadata", "Metadata", 150),
+            ("identity", "Identity Confidence", 135),
         ):
-            self.acquisition_tree.heading(column, text=title)
+            self.acquisition_tree.heading(
+                column,
+                text=title,
+                command=lambda column=column: self.sort_acquisition_grid(column),
+            )
             self.acquisition_tree.column(column, width=width, anchor="w")
         self.acquisition_tree.pack(fill="both", expand=True)
         self.acquisition_tree.bind("<<TreeviewSelect>>", self.on_acquisition_selected)
         self.acquisition_tree.bind("<Double-1>", self.on_acquisition_double_click)
         self.acquisition_tree.bind("<Button-3>", self.show_acquisition_menu)
         self.acquisition_tree.bind("<Control-Right>", self.acquire_selected_release)
+        self.acquisition_tree.bind("<Return>", self.on_acquisition_double_click)
+        self.acquisition_tree.bind("<Control-c>", lambda event: self.copy_selected_release_link())
+        self.acquisition_tree.bind("<Control-C>", lambda event: self.copy_selected_release_link())
 
         self.main_editor = tk.Text(center, wrap="none")
 
@@ -2326,23 +2347,28 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.current_artist_model = presentation.artist
         self.artist_release_lines = release_line_map(self.current_artist_model)
-        self.render_acquisition_grid()
+        self.render_acquisition_grid(preserve_selection=False)
         record_created(presentation.projection_name)
 
-    def render_acquisition_grid(self):
+    def render_acquisition_grid(self, *, preserve_selection: bool = True):
+        selected_ids, scroll_top = self.capture_acquisition_grid_state() if preserve_selection else (set(), 0.0)
         for item in self.acquisition_tree.get_children():
             self.acquisition_tree.delete(item)
         self.acquisition_rows = list(self.current_artist_model.releases) if self.current_artist_model else []
+        self.apply_acquisition_sort()
         self.selected_acquisition_release = None
+        restored_selection = []
         for index, release in enumerate(self.acquisition_rows):
             recommendation = release.acquisition_recommendation.get(
                 "recommendation",
                 release.acquisition_status,
             )
+            iid = str(index)
+            release_id = self.acquisition_release_id(release)
             self.acquisition_tree.insert(
                 "",
                 tk.END,
-                iid=str(index),
+                iid=iid,
                 values=(
                     recommendation,
                     release.title,
@@ -2352,8 +2378,82 @@ class DeezerCuratorGUI(tk.Tk):
                     release.lifecycle_state,
                     release.validation_status,
                     release.metadata_status,
+                    release.identity_confidence,
                 ),
             )
+            if release_id in selected_ids:
+                restored_selection.append(iid)
+        if restored_selection:
+            self.acquisition_tree.selection_set(restored_selection)
+            self.acquisition_tree.focus(restored_selection[0])
+            self.acquisition_tree.see(restored_selection[0])
+            self.on_acquisition_selected()
+        elif preserve_selection:
+            self.selected_acquisition_release_id = ""
+        elif not preserve_selection:
+            self.selected_acquisition_release_id = ""
+            self.selected_acquisition_release = None
+        if preserve_selection:
+            self.restore_acquisition_scroll(scroll_top)
+
+    def capture_acquisition_grid_state(self) -> tuple[set[str], float]:
+        selected_ids = {
+            self.acquisition_release_id(release)
+            for release in self.selected_artist_releases()
+            if self.acquisition_release_id(release)
+        }
+        if self.selected_acquisition_release_id:
+            selected_ids.add(self.selected_acquisition_release_id)
+        try:
+            scroll_top = self.acquisition_tree.yview()[0]
+        except tk.TclError:
+            scroll_top = 0.0
+        return selected_ids, scroll_top
+
+    def restore_acquisition_scroll(self, scroll_top: float):
+        try:
+            self.acquisition_tree.yview_moveto(scroll_top)
+        except tk.TclError:
+            pass
+
+    def sort_acquisition_grid(self, column: str):
+        if self.acquisition_sort_column == column:
+            self.acquisition_sort_reverse = not self.acquisition_sort_reverse
+        else:
+            self.acquisition_sort_column = column
+            self.acquisition_sort_reverse = False
+        self.render_acquisition_grid(preserve_selection=True)
+
+    def apply_acquisition_sort(self):
+        if not self.acquisition_sort_column:
+            return
+        self.acquisition_rows.sort(
+            key=lambda release: self.acquisition_sort_value(release, self.acquisition_sort_column),
+            reverse=self.acquisition_sort_reverse,
+        )
+
+    def acquisition_sort_value(self, release, column: str):
+        values = {
+            "status": release.acquisition_recommendation.get("recommendation", release.acquisition_status),
+            "album": release.title,
+            "year": release.year,
+            "type": release.type,
+            "archive": release.archive_status,
+            "lifecycle": release.lifecycle_state,
+            "validation": release.validation_status,
+            "metadata": release.metadata_status,
+            "identity": release.identity_confidence,
+        }
+        value = values.get(column, "")
+        if column == "year":
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+        return str(value or "").casefold()
+
+    def acquisition_release_id(self, release) -> str:
+        return str(getattr(release, "deezer_album_id", "") or getattr(release, "url", "") or "")
 
     def selected_artist_releases(self):
         if not self.current_artist_model:
@@ -2372,12 +2472,15 @@ class DeezerCuratorGUI(tk.Tk):
         selection = self.acquisition_tree.selection()
         if not selection:
             self.selected_acquisition_release = None
+            self.selected_acquisition_release_id = ""
             return
         index = int(selection[0])
         if index >= len(self.acquisition_rows):
             self.selected_acquisition_release = None
+            self.selected_acquisition_release_id = ""
             return
         self.selected_acquisition_release = self.acquisition_rows[index]
+        self.selected_acquisition_release_id = self.acquisition_release_id(self.selected_acquisition_release)
 
     def on_acquisition_double_click(self, event=None):
         release = self.release_from_acquisition_event(event) or self.selected_acquisition_release
@@ -2387,18 +2490,28 @@ class DeezerCuratorGUI(tk.Tk):
             self.open_release_archive_workspace(release)
         else:
             self.select_release_for_acquisition(release)
+        return "break"
 
     def release_from_acquisition_event(self, event):
-        if not event:
-            return None
-        iid = self.acquisition_tree.identify_row(event.y)
+        iid = ""
+        if event and getattr(event, "y", None) is not None:
+            iid = self.acquisition_tree.identify_row(event.y)
+        if not iid:
+            selection = self.acquisition_tree.selection()
+            iid = selection[0] if selection else self.acquisition_tree.focus()
         if not iid:
             return None
         self.acquisition_tree.selection_set(iid)
-        index = int(iid)
+        try:
+            index = int(iid)
+        except ValueError:
+            return None
         if index >= len(self.acquisition_rows):
             return None
-        return self.acquisition_rows[index]
+        release = self.acquisition_rows[index]
+        self.selected_acquisition_release = release
+        self.selected_acquisition_release_id = self.acquisition_release_id(release)
+        return release
 
     def show_acquisition_menu(self, event):
         release = self.release_from_acquisition_event(event)
@@ -2418,6 +2531,7 @@ class DeezerCuratorGUI(tk.Tk):
 
     def select_release_for_acquisition(self, release):
         self.selected_acquisition_release = release
+        self.selected_acquisition_release_id = self.acquisition_release_id(release)
         self.status.config(text=f"Selected for acquisition: {release.title}")
 
     def queue_release_for_acquisition(self, release):
@@ -2435,6 +2549,7 @@ class DeezerCuratorGUI(tk.Tk):
             self.status.config(text="Select a release first")
             return
         self.copy_release_link(releases[0])
+        return "break"
 
     def show_selected_release_identity(self):
         releases = self.selected_artist_releases()
