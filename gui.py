@@ -6,6 +6,7 @@ import subprocess
 import json
 import re
 import threading
+import webbrowser
 
 from curator.curate import run_curation
 from audio_division.dashboard import dashboard_summary, load_json
@@ -76,7 +77,6 @@ from audio_division.artist_model import (
     load_artist_file,
     release_line_map,
     releases_for_section,
-    render_artist_text,
 )
 from audio_division.opportunities import (
     HUB_OPPORTUNITY_CATEGORIES,
@@ -173,6 +173,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.current_artist_filename = None
         self.current_artist_model = None
         self.artist_release_lines = {}
+        self.acquisition_rows = []
+        self.selected_acquisition_release = None
 
         # Grep toggles
         self.include_live = tk.BooleanVar(value=True)
@@ -302,11 +304,35 @@ class DeezerCuratorGUI(tk.Tk):
         center = ttk.Frame(main, padding=6)
         main.add(center, weight=2)
 
-        self.main_label = ttk.Label(center, text="Artist file")
+        self.main_label = ttk.Label(center, text="Acquisition")
         self.main_label.pack(anchor="w")
 
+        columns = ("status", "album", "year", "type", "archive", "lifecycle", "validation", "metadata")
+        self.acquisition_tree = ttk.Treeview(
+            center,
+            columns=columns,
+            show="headings",
+            selectmode="extended",
+        )
+        for column, title, width in (
+            ("status", "Status", 130),
+            ("album", "Album", 300),
+            ("year", "Year", 70),
+            ("type", "Type", 80),
+            ("archive", "Archive", 100),
+            ("lifecycle", "Lifecycle", 110),
+            ("validation", "Validation", 110),
+            ("metadata", "Metadata", 150),
+        ):
+            self.acquisition_tree.heading(column, text=title)
+            self.acquisition_tree.column(column, width=width, anchor="w")
+        self.acquisition_tree.pack(fill="both", expand=True)
+        self.acquisition_tree.bind("<<TreeviewSelect>>", self.on_acquisition_selected)
+        self.acquisition_tree.bind("<Double-1>", self.on_acquisition_double_click)
+        self.acquisition_tree.bind("<Button-3>", self.show_acquisition_menu)
+        self.acquisition_tree.bind("<Control-Right>", lambda event: self.send_selected_link_to_queue())
+
         self.main_editor = tk.Text(center, wrap="none")
-        self.main_editor.pack(fill="both", expand=True)
 
         # ===== RIGHT =====
         right = ttk.Frame(main, padding=6)
@@ -2266,8 +2292,9 @@ class DeezerCuratorGUI(tk.Tk):
 
     def show_artist_mode(self):
         self.main_mode = "artist"
-        self.main_label.config(text="Artist file")
-        self.main_editor.config(state="disabled")
+        self.main_label.config(text="Acquisition")
+        self.main_editor.pack_forget()
+        self.acquisition_tree.pack(fill="both", expand=True)
 
     def show_inbox_mode(self):
         self.main_mode = "inbox"
@@ -2275,6 +2302,9 @@ class DeezerCuratorGUI(tk.Tk):
         self.main_editor.config(state="normal")
         self.current_artist_model = None
         self.artist_release_lines = {}
+        self.selected_acquisition_release = None
+        self.acquisition_tree.pack_forget()
+        self.main_editor.pack(fill="both", expand=True)
         self.load_inbox()
 
     # ---------------- Artist ----------------
@@ -2294,40 +2324,164 @@ class DeezerCuratorGUI(tk.Tk):
         path = ARTISTS_DIR / self.current_artist_filename
 
         self.show_artist_mode()
-        self.main_editor.config(state="normal")
-        self.main_editor.delete("1.0", tk.END)
 
         if path.exists():
             self.current_artist_model = load_artist_file(path, DATA_DIR)
             self.artist_release_lines = release_line_map(self.current_artist_model)
-            self.main_editor.insert(tk.END, render_artist_text(self.current_artist_model))
+            self.render_acquisition_grid()
             record_created(self.current_artist_filename)
 
-        self.main_editor.config(state="disabled")
+    def render_acquisition_grid(self):
+        for item in self.acquisition_tree.get_children():
+            self.acquisition_tree.delete(item)
+        self.acquisition_rows = list(self.current_artist_model.releases) if self.current_artist_model else []
+        self.selected_acquisition_release = None
+        for index, release in enumerate(self.acquisition_rows):
+            self.acquisition_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(
+                    release.acquisition_status,
+                    release.title,
+                    release.year,
+                    release.type,
+                    release.archive_status,
+                    release.lifecycle_state,
+                    release.validation_status,
+                    release.metadata_status,
+                ),
+            )
 
     def selected_artist_releases(self):
         if not self.current_artist_model:
             return []
-        try:
-            start = self.main_editor.index(tk.SEL_FIRST)
-            end = self.main_editor.index(tk.SEL_LAST)
-        except tk.TclError:
-            start = self.main_editor.index(tk.INSERT)
-            end = self.main_editor.index(f"{start.split('.')[0]}.end")
-
-        start_line = int(start.split(".")[0])
-        end_line = int(end.split(".")[0])
-        if end.endswith(".0") and end_line > start_line:
-            end_line -= 1
         releases = []
-        seen = set()
-        for line_number in range(start_line, end_line + 1):
-            release = self.artist_release_lines.get(line_number)
-            if not release or release.deezer_album_id in seen:
+        for iid in self.acquisition_tree.selection():
+            index = int(iid)
+            if index >= len(self.acquisition_rows):
                 continue
-            releases.append(release)
-            seen.add(release.deezer_album_id)
+            releases.append(self.acquisition_rows[index])
+        if not releases and self.selected_acquisition_release:
+            releases.append(self.selected_acquisition_release)
         return releases
+
+    def on_acquisition_selected(self, event=None):
+        selection = self.acquisition_tree.selection()
+        if not selection:
+            self.selected_acquisition_release = None
+            return
+        index = int(selection[0])
+        if index >= len(self.acquisition_rows):
+            self.selected_acquisition_release = None
+            return
+        self.selected_acquisition_release = self.acquisition_rows[index]
+
+    def on_acquisition_double_click(self, event=None):
+        release = self.release_from_acquisition_event(event) or self.selected_acquisition_release
+        if not release:
+            return
+        if release.archive_path:
+            self.open_release_archive_workspace(release)
+        else:
+            self.select_release_for_acquisition(release)
+
+    def release_from_acquisition_event(self, event):
+        if not event:
+            return None
+        iid = self.acquisition_tree.identify_row(event.y)
+        if not iid:
+            return None
+        self.acquisition_tree.selection_set(iid)
+        index = int(iid)
+        if index >= len(self.acquisition_rows):
+            return None
+        return self.acquisition_rows[index]
+
+    def show_acquisition_menu(self, event):
+        release = self.release_from_acquisition_event(event)
+        if not release:
+            return
+        self.selected_acquisition_release = release
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="Download", command=lambda: self.select_release_for_acquisition(release))
+        menu.add_command(label="Download + Queue", command=lambda: self.queue_release_for_acquisition(release))
+        menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(release.url))
+        menu.add_command(label="Copy Link", command=lambda: self.copy_release_link(release))
+        if release.archive_path:
+            menu.add_command(label="Open Archive", command=lambda: self.open_release_archive_workspace(release))
+        menu.add_command(label="Show Identity", command=lambda: self.show_release_identity(release))
+        menu.add_command(label="Refresh Metadata", command=self.refresh_acquisition_metadata)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def select_release_for_acquisition(self, release):
+        self.selected_acquisition_release = release
+        self.status.config(text=f"Selected for acquisition: {release.title}")
+
+    def queue_release_for_acquisition(self, release):
+        self.custom_editor.insert(tk.END, release.url + "\n")
+        self.status.config(text=f"Queued for acquisition: {release.title}")
+
+    def copy_release_link(self, release):
+        self.clipboard_clear()
+        self.clipboard_append(release.url)
+        self.status.config(text="Copied Deezer link")
+
+    def show_release_identity(self, release):
+        messagebox.showinfo(
+            "Release Identity",
+            "\n".join(
+                [
+                    f"Album: {release.title}",
+                    f"Deezer album ID: {release.deezer_album_id}",
+                    f"Artist file: {self.current_artist_filename or ''}",
+                    f"Identity confidence: {release.identity_confidence}",
+                    f"Archive path: {release.archive_path or 'not archived'}",
+                    f"Lifecycle: {release.lifecycle_state}",
+                    f"Validation: {release.validation_status}",
+                    f"Metadata: {release.metadata_status}",
+                ]
+            ),
+        )
+
+    def refresh_acquisition_metadata(self):
+        self.refresh_archive_metadata()
+        if self.current_artist_filename:
+            path = ARTISTS_DIR / self.current_artist_filename
+            self.current_artist_model = load_artist_file(path, DATA_DIR)
+            self.artist_release_lines = release_line_map(self.current_artist_model)
+            self.render_acquisition_grid()
+
+    def open_release_archive_workspace(self, release):
+        if not release.archive_path:
+            self.status.config(text="No archive path for release")
+            return
+        if not getattr(self, "archive_albums", []):
+            self.refresh_archive_browser()
+        album = next(
+            (
+                row
+                for row in self.archive_albums
+                if str(row.get("archive_path") or "") == release.archive_path
+                or str(row.get("album_id") or "") == release.deezer_album_id
+            ),
+            {},
+        )
+        if not album:
+            self.status.config(text="Archive row not found for release")
+            return
+        if hasattr(self, "archive_tab"):
+            self.tabs.select(self.archive_tab)
+        if hasattr(self, "archive_sections"):
+            self.archive_sections.select(0)
+        artist_iid = f"artist:{album.get('artist_key', '')}"
+        if hasattr(self, "archive_tree") and self.archive_tree.exists(artist_iid):
+            self.archive_tree.selection_set(artist_iid)
+            self.archive_tree.see(artist_iid)
+            self._load_archive_artist_albums(album.get("artist_key", ""), self._archive_album_key(album), None)
+        self.archive_selected_album = album
+        self.set_archive_detail(album)
+        self.status.config(text=f"Opened archive workspace: {release.title}")
 
     # ---------------- Inbox ----------------
 

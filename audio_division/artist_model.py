@@ -6,7 +6,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from audio_division.album_truth import album_truth
 from audio_division.metadata_status import album_metadata_status
+from audio_division.validation_truth import (
+    merge_validation_evidence,
+    validation_evidence_from_identity_release,
+    validation_evidence_from_lifecycle_row,
+    validation_evidence_from_validated_index,
+)
 
 
 SECTION_TYPES = {
@@ -32,6 +39,10 @@ class Release:
     lifecycle_state: str
     validation_status: str
     metadata_status: str
+    acquisition_status: str = "Needs Download"
+    archive_path: str = ""
+    identity_confidence: str = "UNKNOWN"
+    album_truth: dict[str, Any] = field(default_factory=dict)
     source_section: str = ""
     source_line_number: int = 0
     source_line: str = ""
@@ -70,6 +81,8 @@ def load_artist_file(path: Path, data_dir: Path | None = None) -> Artist:
         lifecycle_registry=_load_json(data_dir / "lifecycle_registry.json"),
         metadata_cache=_load_json(data_dir / "metadata_cache.json"),
         validated_index=_load_json(data_dir / "validated_albums.json"),
+        archive_registry=_load_json(data_dir / "archive_registry.json"),
+        identity_registry=_load_json(data_dir / "identity_registry.json"),
     )
 
 
@@ -80,11 +93,17 @@ def parse_artist_text(
     lifecycle_registry: dict[str, Any] | None = None,
     metadata_cache: dict[str, Any] | None = None,
     validated_index: dict[str, Any] | None = None,
+    archive_registry: dict[str, Any] | None = None,
+    identity_registry: dict[str, Any] | None = None,
 ) -> Artist:
     lifecycle_registry = lifecycle_registry or {}
     metadata_cache = metadata_cache or {}
     validated_index = validated_index or {}
+    archive_registry = archive_registry or {}
+    identity_registry = identity_registry or {}
     lifecycle_by_id = _lifecycle_by_album_id(lifecycle_registry)
+    identity_by_id = _identity_by_album_id(identity_registry)
+    archive_by_folder = _archive_by_folder(archive_registry)
 
     artist_name = _artist_name(text, source_file)
     deezer_artist_id = _deezer_artist_id(text)
@@ -106,6 +125,8 @@ def parse_artist_text(
             lifecycle_by_id=lifecycle_by_id,
             metadata_cache=metadata_cache,
             validated_index=validated_index,
+            identity_by_id=identity_by_id,
+            archive_by_folder=archive_by_folder,
         )
         if release:
             releases.append(release)
@@ -143,6 +164,8 @@ def parse_release_line(
     lifecycle_by_id: dict[str, dict[str, Any]] | None = None,
     metadata_cache: dict[str, Any] | None = None,
     validated_index: dict[str, Any] | None = None,
+    identity_by_id: dict[str, dict[str, Any]] | None = None,
+    archive_by_folder: dict[str, dict[str, Any]] | None = None,
 ) -> Release | None:
     url = line.split()[0]
     album_id = _album_id(url)
@@ -158,19 +181,46 @@ def parse_release_line(
     lifecycle_by_id = lifecycle_by_id or {}
     metadata_cache = metadata_cache or {}
     validated_index = validated_index or {}
+    identity_by_id = identity_by_id or {}
+    archive_by_folder = archive_by_folder or {}
     lifecycle = lifecycle_by_id.get(album_id, {})
+    identity_release = identity_by_id.get(album_id, {})
+    archive_row = _archive_row_for_release(identity_release, archive_by_folder)
+    metadata_state = album_metadata_status(album_id, metadata_cache)["state"]
+    truth = _release_truth(
+        artist=str(identity_release.get("discovery_identity", {}).get("artist") or ""),
+        title=title,
+        album_id=album_id,
+        lifecycle=lifecycle,
+        identity_release=identity_release,
+        archive_row=archive_row,
+        metadata_state=metadata_state,
+        metadata_cache=metadata_cache,
+        validated_index=validated_index,
+    )
     lifecycle_state = str(lifecycle.get("highest_state") or "DISCOVERED")
-    validation_status = _validation_status(album_id, lifecycle, validated_index)
+    validation_status = _validation_status(album_id, lifecycle, validated_index, identity_release)
     return Release(
         deezer_album_id=album_id,
         title=title,
         year=year,
         type=release_type,
         url=url,
-        archive_status=_archive_status(lifecycle),
+        archive_status=_archive_status(lifecycle, archive_row),
         lifecycle_state=lifecycle_state,
         validation_status=validation_status,
-        metadata_status=album_metadata_status(album_id, metadata_cache)["state"],
+        metadata_status=metadata_state,
+        acquisition_status=_acquisition_status(
+            archive_row=archive_row,
+            lifecycle=lifecycle,
+            validation_status=validation_status,
+            metadata_status=metadata_state,
+            identity_release=identity_release,
+            truth=truth,
+        ),
+        archive_path=str(archive_row.get("archive_path") or ""),
+        identity_confidence=str(identity_release.get("identity_confidence") or "UNKNOWN"),
+        album_truth=truth,
         source_section=source_section,
         source_line_number=source_line_number,
         source_line=line,
@@ -247,12 +297,14 @@ def _year(raw_year: str) -> str:
     return match.group(0) if match else ""
 
 
-def _archive_status(lifecycle: dict[str, Any]) -> str:
+def _archive_status(lifecycle: dict[str, Any], archive_row: dict[str, Any] | None = None) -> str:
+    if archive_row and archive_row.get("archive_path"):
+        return "archived"
     states = lifecycle.get("states") if isinstance(lifecycle.get("states"), dict) else {}
     if states.get("validated"):
-        return "archived"
+        return "validated"
     if states.get("shipped"):
-        return "shipped"
+        return "downloaded"
     if lifecycle:
         return "known"
     return "not_archived"
@@ -262,10 +314,12 @@ def _validation_status(
     album_id: str,
     lifecycle: dict[str, Any],
     validated_index: dict[str, Any],
+    identity_release: dict[str, Any] | None = None,
 ) -> str:
     states = lifecycle.get("states") if isinstance(lifecycle.get("states"), dict) else {}
     evidence = lifecycle.get("validation_evidence") if isinstance(lifecycle.get("validation_evidence"), dict) else {}
-    if states.get("validated") or evidence.get("available") or album_id in validated_index:
+    identity_validation = identity_release.get("validation", {}) if isinstance(identity_release, dict) else {}
+    if states.get("validated") or evidence.get("available") or identity_validation.get("available") or album_id in validated_index:
         return "validated"
     return "not_validated"
 
@@ -279,6 +333,96 @@ def _lifecycle_by_album_id(registry: dict[str, Any]) -> dict[str, dict[str, Any]
         for album in albums
         if isinstance(album, dict) and album.get("album_id")
     }
+
+
+def _identity_by_album_id(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    releases = registry.get("releases", [])
+    if isinstance(releases, dict):
+        releases = releases.values()
+    return {
+        str(release.get("discovery_identity", {}).get("deezer_album_id")): release
+        for release in releases
+        if isinstance(release, dict) and release.get("discovery_identity", {}).get("deezer_album_id")
+    }
+
+
+def _archive_by_folder(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        _folder_key(row.get("name")): row
+        for row in registry.get("albums", [])
+        if isinstance(row, dict) and _folder_key(row.get("name"))
+    }
+
+
+def _archive_row_for_release(
+    identity_release: dict[str, Any],
+    archive_by_folder: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    folder = identity_release.get("archive_identity", {}).get("folder") if identity_release else ""
+    if not folder:
+        return {}
+    return archive_by_folder.get(_folder_key(folder), {})
+
+
+def _release_truth(
+    *,
+    artist: str,
+    title: str,
+    album_id: str,
+    lifecycle: dict[str, Any],
+    identity_release: dict[str, Any],
+    archive_row: dict[str, Any],
+    metadata_state: str,
+    metadata_cache: dict[str, Any],
+    validated_index: dict[str, Any],
+) -> dict[str, Any]:
+    evidence = merge_validation_evidence(
+        validation_evidence_from_validated_index(album_id, validated_index),
+        validation_evidence_from_lifecycle_row(lifecycle),
+        validation_evidence_from_identity_release(identity_release),
+    )
+    metadata_album = metadata_cache.get("albums", {}).get(album_id, {})
+    truth = album_truth(
+        artist=artist,
+        album=title,
+        archive_path=archive_row.get("archive_path"),
+        registry_artifacts=archive_row.get("artifacts", {}),
+        validator_evidence=evidence,
+        metadata_state=metadata_state,
+        metadata_album=metadata_album,
+        identity_confidence=identity_release.get("identity_confidence", "UNKNOWN"),
+    )
+    return truth.to_dict()
+
+
+def _acquisition_status(
+    *,
+    archive_row: dict[str, Any],
+    lifecycle: dict[str, Any],
+    validation_status: str,
+    metadata_status: str,
+    identity_release: dict[str, Any],
+    truth: dict[str, Any],
+) -> str:
+    if archive_row.get("archive_path"):
+        return "Archived"
+    states = lifecycle.get("states") if isinstance(lifecycle.get("states"), dict) else {}
+    lifecycle_state = str(lifecycle.get("highest_state") or "").upper()
+    if states.get("shipped") or lifecycle_state == "SHIPPED":
+        return "Downloaded"
+    if validation_status == "validated":
+        return "Validated"
+    if metadata_status != "CACHED" and lifecycle:
+        return "Needs Metadata"
+    confidence = str(identity_release.get("identity_confidence") or "UNKNOWN")
+    maintenance = truth.get("maintenance") if isinstance(truth.get("maintenance"), dict) else {}
+    if confidence not in {"HIGH", "MEDIUM"} or maintenance.get("category") == "needs_review":
+        return "Needs Review"
+    return "Needs Download"
+
+
+def _folder_key(value: Any) -> str:
+    return str(value or "").strip().casefold()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
