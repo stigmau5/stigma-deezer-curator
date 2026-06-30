@@ -63,6 +63,7 @@ from audio_division.closed_loop_monitor import queue_album_payload
 from audio_division.incoming_projection import incoming_releases
 from audio_division.audio_division_wrapper import process_validated_release
 from audio_division.validator_runner import run_validator_for_release
+from audio_division.pipeline_controller import recommend_next_action
 from audio_division.maintenance import (
     maintenance_action_target,
     maintenance_albums,
@@ -603,7 +604,7 @@ class DeezerCuratorGUI(tk.Tk):
         processing.pack(fill="x", pady=(6, 0))
         self.processing_queue_tree = ttk.Treeview(
             processing,
-            columns=("artist", "album", "source", "folder", "state"),
+            columns=("artist", "album", "source", "folder", "state", "next_action"),
             show="headings",
             height=5,
             selectmode="browse",
@@ -614,6 +615,7 @@ class DeezerCuratorGUI(tk.Tk):
             ("source", "Source", 80),
             ("folder", "Folder", 220),
             ("state", "Current State", 120),
+            ("next_action", "Next Action", 120),
         ):
             self.processing_queue_tree.heading(column, text=title)
             self.processing_queue_tree.column(column, width=width, anchor="w")
@@ -1676,7 +1678,7 @@ class DeezerCuratorGUI(tk.Tk):
         if not hasattr(self, "processing_queue_tree"):
             return
         self.processing_queue_rows = [
-            release.to_row()
+            self.release_pipeline_row(release.to_row())
             for release in incoming_releases(
                 self.audio_settings,
                 identity_registry=load_json(DATA_DIR / "identity_registry.json"),
@@ -1700,8 +1702,16 @@ class DeezerCuratorGUI(tk.Tk):
                     row.get("source", ""),
                     self._shorten_path(row.get("folder", ""), max_chars=38),
                     row.get("state", ""),
+                    row.get("next_action", ""),
                 ),
             )
+
+    def release_pipeline_row(self, row: dict) -> dict:
+        recommendation = recommend_next_action(row).to_dict()
+        updated = dict(row)
+        updated["pipeline_recommendation"] = recommendation
+        updated["next_action"] = recommendation["recommended_action"]
+        return updated
 
     def selected_incoming_album(self) -> dict:
         selection = self.processing_queue_tree.selection() if hasattr(self, "processing_queue_tree") else []
