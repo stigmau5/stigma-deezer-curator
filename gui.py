@@ -33,6 +33,7 @@ from audio_division.batch_operations import (
     write_batch_operation_report,
 )
 from audio_division.album_workspace import album_workspace
+from audio_division.active_album import ActiveAlbum, active_album_from_row, active_album_index, restore_active_album
 from audio_division.artwork_browser import artwork_items, filter_artwork_items
 from audio_division.cover_widget import CoverWidget
 from audio_division.physical_archive import (
@@ -244,6 +245,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.archive_artist_rows: list[dict] = []
         self.archive_album_rows: list[dict] = []
         self.archive_selected_album: dict = {}
+        self.active_archive_album = ActiveAlbum()
+        self.archive_tree_open_items: set[str] = set()
         self.archive_artist_var = tk.StringVar()
         self.archive_album_var = tk.StringVar()
         self.archive_operation_result_var = tk.StringVar()
@@ -1421,6 +1424,7 @@ class DeezerCuratorGUI(tk.Tk):
         )
 
     def run_archive_audit(self):
+        self.remember_active_archive_album()
         registry = load_json(DATA_DIR / "archive_registry.json")
         archive_root_text = registry.get("archive_root") or self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
         if not archive_root_text:
@@ -1447,6 +1451,8 @@ class DeezerCuratorGUI(tk.Tk):
             self.archive_audit_button.config(state=state)
         if hasattr(self, "archive_audit_status_var"):
             self.archive_audit_status_var.set(message)
+        if self.archive_selected_album:
+            self.archive_operation_result_var.set(message)
         self.status.config(text=message)
 
     def _run_archive_audit_thread(self, registry: dict, archive_root: Path, reports_dir: Path):
@@ -1463,9 +1469,10 @@ class DeezerCuratorGUI(tk.Tk):
             )
         except Exception as exc:
             message = f"Archive audit failed: {exc}"
-        self.after(0, lambda message=message: self._set_archive_audit_running(False, message))
+        self.after(0, lambda message=message: self._finish_archive_background_operation("_archive_audit_running", message))
 
     def run_archive_revalidation(self):
+        self.remember_active_archive_album()
         registry = load_json(DATA_DIR / "archive_registry.json")
         archive_root_text = registry.get("archive_root") or self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
         if not archive_root_text:
@@ -1492,6 +1499,8 @@ class DeezerCuratorGUI(tk.Tk):
             self.archive_revalidation_button.config(state=state)
         if hasattr(self, "archive_revalidation_status_var"):
             self.archive_revalidation_status_var.set(message)
+        if self.archive_selected_album:
+            self.archive_operation_result_var.set(message)
         self.status.config(text=message)
 
     def _run_archive_revalidation_thread(self, registry: dict, archive_root: Path, reports_dir: Path):
@@ -1501,6 +1510,7 @@ class DeezerCuratorGUI(tk.Tk):
                     message = f"Revalidating {current} / {total} albums..."
                     self.after(0, lambda message=message: self.archive_revalidation_status_var.set(message))
                     self.after(0, lambda message=message: self.status.config(text=message))
+                    self.after(0, lambda message=message: self.archive_operation_result_var.set(message))
 
             report = revalidate_archive(
                 registry,
@@ -1522,7 +1532,16 @@ class DeezerCuratorGUI(tk.Tk):
             )
         except Exception as exc:
             message = f"Archive revalidation failed: {exc}"
-        self.after(0, lambda message=message: self._set_archive_revalidation_running(False, message))
+        self.after(0, lambda message=message: self._finish_archive_background_operation("_archive_revalidation_running", message))
+
+    def _finish_archive_background_operation(self, flag_name: str, message: str):
+        if flag_name == "_archive_audit_running":
+            self._set_archive_audit_running(False, message)
+        elif flag_name == "_archive_revalidation_running":
+            self._set_archive_revalidation_running(False, message)
+        else:
+            self.status.config(text=message)
+        self.refresh_archive_browser()
 
     def refresh_library(self):
         try:
@@ -1553,6 +1572,51 @@ class DeezerCuratorGUI(tk.Tk):
         if hasattr(self, "artwork_tree"):
             self.refresh_artwork_browser()
 
+    def remember_active_archive_album(self) -> ActiveAlbum:
+        if getattr(self, "archive_selected_album", {}):
+            self.active_archive_album = active_album_from_row(self.archive_selected_album)
+        return self.active_archive_album
+
+    def capture_archive_tree_expansion(self) -> set[str]:
+        if not hasattr(self, "archive_tree"):
+            return set()
+        return {
+            str(item)
+            for item in self.archive_tree.get_children("")
+            if self.archive_tree.item(item, "open")
+        }
+
+    def capture_active_archive_context(self, active_tab: str = ""):
+        active = self.remember_active_archive_album()
+        selection = capture_archive_selection(
+            getattr(self, "archive_selected_album", {}),
+            active_tab=active_tab,
+            album_yview=self.archive_album_tree.yview() if hasattr(self, "archive_album_tree") else None,
+        )
+        self.archive_tree_open_items = self.capture_archive_tree_expansion()
+        return selection
+
+    def restore_active_archive_context(self, selection):
+        self.refresh_archive_browser(
+            restore_album_key=selection.album_key,
+            restore_artist_key=selection.artist_key,
+            restore_album_yview=selection.album_yview,
+        )
+
+    def find_active_archive_album(self, active: ActiveAlbum | None = None) -> dict:
+        active = active or self.active_archive_album
+        if not active.present:
+            return {}
+        return (
+            restore_active_album(self.filtered_archive_albums, active)
+            or restore_active_album(self.archive_albums, active)
+            or {}
+        )
+
+    def preserve_archive_workspace(self):
+        if self.archive_selected_album:
+            self.set_archive_detail(self.archive_selected_album)
+
     def refresh_archive_browser(
         self,
         restore_album_key: str = "",
@@ -1561,6 +1625,8 @@ class DeezerCuratorGUI(tk.Tk):
     ):
         if not hasattr(self, "archive_tree"):
             return
+        active = self.remember_active_archive_album()
+        open_items = self.capture_archive_tree_expansion()
         if not restore_album_key and getattr(self, "archive_selected_album", {}):
             selection = capture_archive_selection(
                 self.archive_selected_album,
@@ -1578,14 +1644,12 @@ class DeezerCuratorGUI(tk.Tk):
             restore_album_key=restore_album_key,
             restore_artist_key=restore_artist_key,
             restore_album_yview=restore_album_yview,
+            active_album=active,
+            open_items=open_items,
         )
 
     def refresh_archive_metadata(self):
-        selection = capture_archive_selection(
-            getattr(self, "archive_selected_album", {}),
-            active_tab=self.tabs.select(),
-            album_yview=self.archive_album_tree.yview(),
-        )
+        selection = self.capture_active_archive_context(active_tab=self.tabs.select())
         reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
         if not reports_dir.is_absolute():
             reports_dir = BASE_DIR / reports_dir
@@ -1594,11 +1658,7 @@ class DeezerCuratorGUI(tk.Tk):
         except OSError as exc:
             self.archive_operation_result_var.set(f"Metadata refresh failed: {exc}")
             return
-        self.refresh_archive_browser(
-            restore_album_key=selection.album_key,
-            restore_artist_key=selection.artist_key,
-            restore_album_yview=selection.album_yview,
-        )
+        self.restore_active_archive_context(selection)
         if selection.active_tab:
             self.tabs.select(selection.active_tab)
         self.archive_operation_result_var.set(
@@ -1610,6 +1670,8 @@ class DeezerCuratorGUI(tk.Tk):
         restore_album_key: str = "",
         restore_artist_key: str = "",
         restore_album_yview: float | None = None,
+        active_album: ActiveAlbum | None = None,
+        open_items: set[str] | None = None,
     ):
         self.filtered_archive_albums = filter_archive_albums(
             self.archive_albums,
@@ -1631,17 +1693,25 @@ class DeezerCuratorGUI(tk.Tk):
                 iid=f"artist:{row['artist_key']}",
                 text=f"{row['artist']} ({row['album_count']})",
             )
+        if open_items:
+            for item in self.archive_tree.get_children(""):
+                self.archive_tree.item(item, open=item in open_items)
         self.refresh_processing_queue_view()
         self.refresh_maintenance_view()
         self.refresh_pipeline_dashboard()
+        active_album = active_album or self.active_archive_album
+        active_match = self.find_active_archive_album(active_album)
+        if active_match:
+            restore_artist_key = str(active_match.get("artist_key") or restore_artist_key)
+            restore_album_key = str(active_match.get("archive_path") or restore_album_key)
         if restore_artist_key:
             artist_iid = f"artist:{restore_artist_key}"
             if self.archive_tree.exists(artist_iid):
                 self.archive_tree.selection_set(artist_iid)
                 self.archive_tree.see(artist_iid)
-                self._load_archive_artist_albums(restore_artist_key, restore_album_key, restore_album_yview)
+                self._load_archive_artist_albums(restore_artist_key, restore_album_key, restore_album_yview, active_album)
                 return
-        self.clear_archive_albums()
+        self.preserve_archive_workspace()
 
     def set_archive_tree_expansion(self, mode: str):
         selected_artist_key = ""
@@ -1660,10 +1730,9 @@ class DeezerCuratorGUI(tk.Tk):
 
     def clear_archive_albums(self):
         self.archive_album_rows = []
-        self.archive_selected_album = {}
         for item in self.archive_album_tree.get_children():
             self.archive_album_tree.delete(item)
-        self.set_archive_detail({})
+        self.preserve_archive_workspace()
 
     def on_archive_artist_selected(self, event=None):
         selection = self.archive_tree.selection()
@@ -1680,14 +1749,18 @@ class DeezerCuratorGUI(tk.Tk):
         artist_key: str,
         restore_album_key: str = "",
         restore_album_yview: float | None = None,
+        active_album: ActiveAlbum | None = None,
     ):
         self.archive_album_rows = albums_for_archive_artist(self.filtered_archive_albums, artist_key)
         for existing in self.archive_album_tree.get_children():
             self.archive_album_tree.delete(existing)
         restored_index = None
+        active_album = active_album or self.active_archive_album
+        if active_album and active_album.present:
+            restored_index = active_album_index(self.archive_album_rows, active_album)
         if restore_album_key:
             state = capture_archive_selection({"artist_key": artist_key, "archive_path": restore_album_key})
-            restored_index = selected_album_index(self.archive_album_rows, state)
+            restored_index = restored_index if restored_index is not None else selected_album_index(self.archive_album_rows, state)
         restored_iid = str(restored_index) if restored_index is not None else ""
         for index, row in enumerate(self.archive_album_rows):
             readiness = row.get("archive_readiness", {})
@@ -1710,10 +1783,10 @@ class DeezerCuratorGUI(tk.Tk):
             if restore_album_yview is not None:
                 self.archive_album_tree.yview_moveto(restore_album_yview)
             self.archive_selected_album = self.archive_album_rows[int(restored_iid)]
+            self.active_archive_album = active_album_from_row(self.archive_selected_album)
             self.set_archive_detail(self.archive_selected_album)
             return
-        self.archive_selected_album = {}
-        self.set_archive_detail({})
+        self.preserve_archive_workspace()
 
     def on_archive_album_selected(self, event=None):
         selection = self.archive_album_tree.selection()
@@ -1723,6 +1796,7 @@ class DeezerCuratorGUI(tk.Tk):
         if index >= len(self.archive_album_rows):
             return
         self.archive_selected_album = self.archive_album_rows[index]
+        self.active_archive_album = active_album_from_row(self.archive_selected_album)
         self.set_archive_detail(self.archive_selected_album)
 
     def set_archive_detail(self, details: dict):
