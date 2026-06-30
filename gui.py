@@ -65,6 +65,7 @@ from audio_division.audio_division_wrapper import process_validated_release
 from audio_division.validator_runner import run_validator_for_release
 from audio_division.pipeline_controller import recommend_next_action
 from audio_division.pipeline_dashboard import PIPELINE_STAGES, build_pipeline_dashboard
+from audio_division.tool_discovery import discover_configured_tools
 from audio_division.maintenance import (
     maintenance_action_target,
     maintenance_albums,
@@ -217,6 +218,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
+        self.tool_status_labels: dict[str, ttk.Label] = {}
+        self.tool_resolved_labels: dict[str, ttk.Label] = {}
+        self.tool_version_labels: dict[str, ttk.Label] = {}
         self.layout_panes: dict[str, ttk.Panedwindow] = {}
         self.dashboard_value_labels: dict[str, ttk.Label] = {}
         self.action_detail = None
@@ -1199,46 +1203,108 @@ class DeezerCuratorGUI(tk.Tk):
         self.refresh_pipeline_dashboard()
 
     def _build_settings_tab(self, parent):
-        groups = [
-            ("Roots", [
-                ("archive_paths", "main_archive_root", "Main Archive Root"),
-                ("archive_paths", "incoming_root", "Incoming Root"),
-                ("archive_paths", "problematic_root", "Problematic Root"),
-                ("archive_paths", "needs_validation_root", "Needs Validation Root"),
-                ("validator", "validated_index_path", "Validated Index Path"),
-                ("validator", "validation_log_root", "Validation Log Root"),
-                ("metadata", "metadata_cache_path", "Metadata Cache Path"),
-                ("reports", "reports_directory", "Reports Directory"),
-            ]),
-            ("Tools", [
-                ("tools", "audio_division_path", "Audio Division Path"),
-                ("tools", "nfo_generator_path", "NFO Generator Path"),
-                ("tools", "sfv_generator_path", "SFV Generator Path"),
-                ("tools", "flac_validator_path", "FLAC Validator Path"),
-                ("tools", "file_manager_path", "File Manager Path"),
-            ]),
-            ("Providers", [
-                ("playback", "provider", "Player Provider"),
-                ("playback", "player_path", "Player Path"),
-                ("playback", "player_args", "Player Arguments"),
-            ]),
-        ]
         sections = ttk.Notebook(parent)
         sections.pack(fill="both", expand=True)
-        for title, fields in groups:
-            form = ttk.Frame(sections, padding=10)
-            sections.add(form, text=title)
-            for row, (section, key, label) in enumerate(fields):
-                ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
-                var = tk.StringVar(value=self.audio_settings.get(section, {}).get(key, ""))
-                ttk.Entry(form, textvariable=var).grid(row=row, column=1, sticky="ew", pady=4)
-                self.audio_setting_vars[(section, key)] = var
-            form.columnconfigure(1, weight=1)
+
+        roots = ttk.Frame(sections, padding=10)
+        sections.add(roots, text="Roots")
+        root_fields = [
+            ("archive_paths", "main_archive_root", "Main Archive Root", "Canonical archive location."),
+            ("archive_paths", "incoming_root", "Incoming Root", "Downloaded releases waiting for validation."),
+            ("archive_paths", "problematic_root", "Problematic Root", "Holding area for releases needing manual review."),
+            (
+                "archive_paths",
+                "needs_validation_root",
+                "Needs Validation Root",
+                "Optional validation work area. Today this may overlap Incoming Root when downloads are validated in place.",
+            ),
+            ("validator", "validated_index_path", "Validated Index", "Local index of releases already validated."),
+            ("validator", "validation_log_root", "Validation Logs", "Root scanned for validator evidence."),
+            ("metadata", "metadata_cache_path", "Metadata Cache", "Local metadata cache file."),
+            ("reports", "reports_directory", "Reports", "Generated report output folder."),
+        ]
+        self._build_settings_fields(roots, root_fields)
+
+        tools = ttk.Frame(sections, padding=10)
+        sections.add(tools, text="Tools")
+        ttk.Label(
+            tools,
+            text="External tools are discovered without execution. Legacy NFO and SFV tool paths remain supported in saved settings.",
+            wraplength=900,
+        ).grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 10))
+        tool_fields = [
+            ("audio_division", "tools", "audio_division_path", "Audio Division"),
+            ("validator", "tools", "flac_validator_path", "Validator"),
+            ("file_manager", "tools", "file_manager_path", "File Manager"),
+        ]
+        for row, (tool_id, section, key, label) in enumerate(tool_fields, start=1):
+            ttk.Label(tools, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
+            status = ttk.Label(tools, text="Not Found", width=14)
+            status.grid(row=row, column=1, sticky="w", padx=(0, 10), pady=4)
+            self.tool_status_labels[tool_id] = status
+            var = tk.StringVar(value=self.audio_settings.get(section, {}).get(key, ""))
+            entry = ttk.Entry(tools, textvariable=var)
+            entry.grid(row=row, column=2, sticky="ew", pady=4)
+            self.audio_setting_vars[(section, key)] = var
+            resolved = ttk.Label(tools, text="", width=34)
+            resolved.grid(row=row, column=3, sticky="w", padx=(10, 10), pady=4)
+            self.tool_resolved_labels[tool_id] = resolved
+            version = ttk.Label(tools, text="Unavailable", width=16)
+            version.grid(row=row, column=4, sticky="w", pady=4)
+            self.tool_version_labels[tool_id] = version
+        tools.columnconfigure(2, weight=1)
+
+        providers = ttk.Frame(sections, padding=10)
+        sections.add(providers, text="Providers")
+        ttk.Label(
+            providers,
+            text="Provider settings are grouped here so Deezer, YouTube, and Internet Archive can be added without changing the Settings layout.",
+            wraplength=900,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        provider_fields = [
+            ("playback", "provider", "Playback Provider", "Current local playback backend."),
+            ("playback", "player_path", "Player Path", "Executable used for local playback."),
+            ("playback", "player_args", "Player Arguments", "Optional playback arguments."),
+        ]
+        self._build_settings_fields(providers, provider_fields, start_row=1)
 
         buttons = ttk.Frame(parent)
         buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(buttons, text="Save Settings", command=self.save_audio_settings).pack(side="left")
         ttk.Button(buttons, text="Reload Settings", command=self.reload_audio_settings).pack(side="left", padx=(6, 0))
+        ttk.Button(buttons, text="Refresh Tool Discovery", command=self.refresh_tool_settings_status).pack(side="left", padx=(6, 0))
+        self.refresh_tool_settings_status()
+
+    def _build_settings_fields(self, parent, fields, start_row: int = 0):
+        for offset, (section, key, label, description) in enumerate(fields):
+            row = start_row + offset
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
+            var = tk.StringVar(value=self.audio_settings.get(section, {}).get(key, ""))
+            ttk.Entry(parent, textvariable=var).grid(row=row, column=1, sticky="ew", pady=4)
+            self.audio_setting_vars[(section, key)] = var
+            note = ttk.Label(parent, text=description, foreground="#555", wraplength=380)
+            note.grid(row=row, column=2, sticky="w", padx=(10, 0), pady=4)
+        parent.columnconfigure(1, weight=1)
+
+    def refresh_tool_settings_status(self):
+        if not hasattr(self, "tool_status_labels"):
+            return
+        preview = dict(self.audio_settings)
+        preview["tools"] = dict(self.audio_settings.get("tools", {}))
+        for (section, key), var in self.audio_setting_vars.items():
+            if section == "tools":
+                preview["tools"][key] = var.get()
+        discoveries = discover_configured_tools(preview, base_dir=BASE_DIR)
+        for tool_id, discovery in discoveries.items():
+            status = self.tool_status_labels.get(tool_id)
+            if status is not None:
+                status.config(text=discovery.status)
+            resolved = self.tool_resolved_labels.get(tool_id)
+            if resolved is not None:
+                resolved.config(text=self._shorten_path(discovery.resolved_path or "Not Found", max_chars=42))
+            version = self.tool_version_labels.get(tool_id)
+            if version is not None:
+                version.config(text=discovery.version)
 
     def refresh_pipeline_dashboard(self):
         if not hasattr(self, "pipeline_stage_trees"):
@@ -2454,12 +2520,14 @@ class DeezerCuratorGUI(tk.Tk):
         for (section, key), var in self.audio_setting_vars.items():
             self.audio_settings.setdefault(section, {})[key] = var.get()
         save_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE, self.audio_settings)
+        self.refresh_tool_settings_status()
         self.status.config(text="Hub settings saved")
 
     def reload_audio_settings(self):
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         for (section, key), var in self.audio_setting_vars.items():
             var.set(self.audio_settings.get(section, {}).get(key, ""))
+        self.refresh_tool_settings_status()
         self.status.config(text="Hub settings reloaded")
 
     # ---------------- Sorting ----------------

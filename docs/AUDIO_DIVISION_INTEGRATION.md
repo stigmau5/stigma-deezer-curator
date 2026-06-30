@@ -20,7 +20,17 @@ The preferred setting is:
 tools.audio_division_path
 ```
 
-Existing settings remain available:
+The Settings UI presents workflow-level tools:
+
+```text
+Audio Division
+Validator
+File Manager
+```
+
+Audio Division and Validator paths are auto-discovered without executing the tools. If exactly one installation is found, the setting can be populated automatically. If none or multiple are found, the path remains manually configurable.
+
+Existing settings remain available for compatibility:
 
 ```text
 tools.nfo_generator_path
@@ -28,7 +38,9 @@ tools.sfv_generator_path
 tools.flac_validator_path
 ```
 
-`nfo_generator_path` and `sfv_generator_path` are kept for compatibility. They should not be removed until existing workflows are migrated to Audio Division-owned processing.
+`nfo_generator_path` and `sfv_generator_path` are treated as legacy implementation details. They are kept in the settings file and operation runner for older maintenance actions, but they are no longer primary Settings UI fields.
+
+Incoming Root and Needs Validation Root are both retained. Incoming Root represents newly downloaded releases; Needs Validation Root remains an optional validation work area and may point at the same location when validation happens in place.
 
 ## Command Contract
 

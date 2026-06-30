@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from curator.atomic import atomic_write_text
+from audio_division.tool_discovery import apply_tool_discovery
 
 DEFAULT_SETTINGS = {
     "archive_paths": {
@@ -69,7 +70,7 @@ def load_audio_division_settings(path: Path) -> dict[str, Any]:
         if not isinstance(incoming, dict):
             continue
         settings[section].update({key: str(value) for key, value in incoming.items() if key in defaults})
-    return settings
+    return apply_tool_discovery(settings, base_dir=path.parent.parent)
 
 
 def save_audio_division_settings(path: Path, settings: dict[str, Any]) -> None:

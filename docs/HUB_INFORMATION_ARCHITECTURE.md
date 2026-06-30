@@ -57,8 +57,8 @@ Campaigns, Opportunities, Dashboard Actions, and Archive Actions are compatibili
 ### Settings
 
 - **Roots** — archive, incoming, problematic, validation, metadata, and report paths
-- **Tools** — Audio Division, NFO, SFV, validator, and file-manager executables
-- **Providers** — playback and future external service providers
+- **Tools** — Audio Division, Validator, and File Manager as workflow tools; NFO/SFV paths remain legacy compatibility settings
+- **Providers** — playback now, with room for Deezer, YouTube, Internet Archive, and other source-specific settings later
 
 ## Small Implementation Pass
 
