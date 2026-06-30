@@ -9,6 +9,8 @@ from audio_division.album_workspace import (
     metadata_tracks,
     nfo_info,
     parse_playlist,
+    release_timeline,
+    render_timeline,
     tracklist_info,
 )
 
@@ -110,6 +112,7 @@ class AlbumWorkspaceTests(unittest.TestCase):
         self.assertIn("integrity", workspace)
         self.assertIn("relationships", workspace)
         self.assertIn(("Readiness", "ARCHIVE_READY"), workspace["status_glance"])
+        self.assertIn("timeline", workspace)
 
     def test_album_workspace_includes_related_albums(self):
         details = self.details()
@@ -145,6 +148,55 @@ class AlbumWorkspaceTests(unittest.TestCase):
             playlist.write_text("#EXTM3U\n\n# comment\ntrack one.flac\n")
 
             self.assertEqual(parse_playlist(playlist), ["01 - track one"])
+
+    def test_release_timeline_derives_events_and_confidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album = Path(tmp)
+            for name in ("release.nfo", "release.sfv", "album.m3u8", "cover.jpg", "STIGMA_VALIDATED.txt", "01.flac"):
+                (album / name).write_text("evidence", encoding="utf-8")
+            details = self.details(str(album))
+            details.update(
+                {
+                    "metadata_status": "CACHED",
+                    "identity_confidence": "HIGH",
+                    "archive_path_confidence": "HIGH",
+                    "pipeline_state": {
+                        "state": "ARCHIVED",
+                        "evidence": ["curator_state", "archive_filesystem"],
+                        "confidence": "HIGH",
+                    },
+                    "album_status": {
+                        "items": {
+                            "validation": "Present",
+                            "nfo": "Present",
+                            "sfv": "Present",
+                            "playlist": "Present",
+                            "artwork": "Present",
+                        },
+                        "health_percent": 100,
+                        "validation_source": "validated_index",
+                        "validation_confidence": "HIGH",
+                        "validation_reason": "Album ID is present in validated_albums.json.",
+                    },
+                }
+            )
+
+            workspace = album_workspace(details, {"albums": {"302127": {"cached_at": "2026-06-30T10:00:00"}}})
+
+        events = {event["event"]: event for event in workspace["timeline"]}
+        self.assertEqual(events["Curated"]["confidence"], "HIGH")
+        self.assertEqual(events["Validated"]["confidence"], "HIGH")
+        self.assertEqual(events["Metadata Cached"]["timestamp"], "2026-06-30T10:00:00")
+        self.assertIn("Processed", events)
+        self.assertIn("Archived", events)
+        self.assertIn("Audit Passed", events)
+        self.assertIn("Metadata Cached", workspace["timeline_text"])
+
+    def test_release_timeline_is_empty_without_evidence(self):
+        events = release_timeline({}, {})
+
+        self.assertEqual(events, [])
+        self.assertEqual(render_timeline(events), "No timeline evidence found.")
 
 
 if __name__ == "__main__":

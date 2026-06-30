@@ -794,7 +794,9 @@ class DeezerCuratorGUI(tk.Tk):
 
         timeline = ttk.LabelFrame(details, text="Timeline", padding=10)
         timeline.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
-        ttk.Label(timeline, text="Timeline will appear here as lifecycle events become available.").pack(anchor="w")
+        self.archive_timeline_text = tk.Text(timeline, height=6, wrap="word", font="TkFixedFont")
+        self.archive_timeline_text.pack(fill="both", expand=True)
+        self.archive_timeline_text.config(state="disabled")
 
         actions = ttk.LabelFrame(details, text="Actions", padding=10)
         actions.grid(row=3, column=0, sticky="ew", pady=(0, 10))
@@ -1892,6 +1894,7 @@ class DeezerCuratorGUI(tk.Tk):
                 self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
         self._set_archive_thumbnail(workspace.get("cover", {}))
         self._set_text_widget(self.archive_integrity_text, self._format_integrity(workspace.get("integrity", {})))
+        self._set_text_widget(self.archive_timeline_text, workspace.get("timeline_text", "No timeline evidence found."))
         self._set_text_widget(self.archive_relationships_text, workspace.get("relationships_text", ""))
         files = workspace.get("files", {})
         self._set_text_widget(

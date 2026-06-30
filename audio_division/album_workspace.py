@@ -29,6 +29,7 @@ def album_workspace(
     relationships = album_relationships(details, collection_albums or [])
     status = details.get("album_status", {})
     readiness = details.get("archive_readiness", {})
+    timeline = release_timeline(details, metadata or {}, detected, integrity)
     return {
         "presentation": presentation,
         "cover": cover,
@@ -37,6 +38,8 @@ def album_workspace(
         "tracklist": tracklist,
         "files": files,
         "integrity": integrity,
+        "timeline": timeline,
+        "timeline_text": render_timeline(timeline),
         "relationships": relationships,
         "relationships_text": render_relationships(relationships),
         "playback": playback_summary(details),
@@ -103,6 +106,120 @@ def status_glance(status: dict[str, Any], readiness: dict[str, Any]) -> list[tup
         ("Readiness", readiness.get("state", "UNKNOWN")),
         ("Health", f"{status.get('health_percent', 0)}%"),
     ]
+
+
+def release_timeline(
+    details: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+    detected: AlbumArtifacts | None = None,
+    integrity: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    metadata = metadata or {}
+    integrity = integrity or {}
+    events: list[dict[str, str]] = []
+    pipeline = details.get("pipeline_state", {}) if isinstance(details.get("pipeline_state"), dict) else {}
+    evidence = set(pipeline.get("evidence", []))
+    status = details.get("album_status", {}) if isinstance(details.get("album_status"), dict) else {}
+    status_items = status.get("items", {}) if isinstance(status.get("items"), dict) else {}
+    artifacts = details.get("artifacts", {}) if isinstance(details.get("artifacts"), dict) else {}
+    album_id = str(details.get("album_id") or "")
+
+    if album_id or "curator_state" in evidence:
+        events.append(
+            _timeline_event(
+                "Curated",
+                _first_timestamp(details, ("curated_at", "discovered_at", "last_updated")),
+                _confidence(details.get("identity_confidence"), "MEDIUM" if "curator_state" in evidence else "LOW"),
+                "Curator or identity evidence exists.",
+                _source_list("curator_state" if "curator_state" in evidence else "", "album_id" if album_id else ""),
+            )
+        )
+
+    if "download_folder" in evidence or details.get("folder"):
+        events.append(
+            _timeline_event(
+                "Downloaded",
+                _first_timestamp(details, ("downloaded_at",)),
+                "HIGH",
+                "Downloaded folder evidence exists.",
+                _source_list("download_folder", details.get("folder")),
+            )
+        )
+
+    if status_items.get("validation") == "Present" or details.get("validation_status") == "validated":
+        events.append(
+            _timeline_event(
+                "Validated",
+                _first_timestamp(details, ("validated_at",)),
+                _confidence(status.get("validation_confidence") or details.get("validation_confidence"), "MEDIUM"),
+                status.get("validation_reason") or details.get("validation_reason") or "Validation evidence exists.",
+                _source_list(status.get("validation_source") or details.get("validation_source"), details.get("validation_log_path")),
+            )
+        )
+
+    processed_sources = []
+    for key in ("nfo", "sfv", "playlist"):
+        if status_items.get(key) == "Present" or artifacts.get(key):
+            processed_sources.append(key.upper() if key != "playlist" else "Playlist")
+    if processed_sources:
+        confidence = "HIGH" if {"NFO", "SFV"}.issubset(set(processed_sources)) else "MEDIUM"
+        events.append(
+            _timeline_event(
+                "Processed",
+                _first_timestamp(details, ("processed_at",)),
+                confidence,
+                "Archive documentation or playlist artifacts exist.",
+                processed_sources,
+            )
+        )
+
+    if details.get("archive_path") or pipeline.get("state") == "ARCHIVED" or "archive_filesystem" in evidence:
+        events.append(
+            _timeline_event(
+                "Archived",
+                _first_timestamp(details, ("archived_at",)),
+                _confidence(details.get("archive_path_confidence"), "HIGH" if details.get("archive_path") else "MEDIUM"),
+                "Archive location evidence exists.",
+                _source_list("archive_filesystem" if "archive_filesystem" in evidence else "", details.get("archive_path")),
+            )
+        )
+
+    metadata_album = metadata.get("albums", {}).get(album_id, {}) if album_id else {}
+    if metadata_album or details.get("metadata_status") == "CACHED":
+        events.append(
+            _timeline_event(
+                "Metadata Cached",
+                _first_timestamp(metadata_album, ("cached_at", "updated_at", "release_date")) or _first_timestamp(details, ("metadata_cached_at",)),
+                "HIGH" if metadata_album else "MEDIUM",
+                "Metadata cache contains this album.",
+                _source_list("metadata_cache", album_id),
+            )
+        )
+
+    if _audit_passed(integrity, status):
+        events.append(
+            _timeline_event(
+                "Audit Passed",
+                _first_timestamp(details, ("audit_passed_at",)),
+                "HIGH",
+                "Integrity checks are healthy.",
+                _source_list("album_integrity", f"{status.get('health_percent', 0)}% health"),
+            )
+        )
+
+    return events
+
+
+def render_timeline(events: list[dict[str, str]]) -> str:
+    if not events:
+        return "No timeline evidence found."
+    lines = []
+    for event in events:
+        when = event.get("timestamp") or "Derived"
+        sources = f" [{event['sources']}]" if event.get("sources") else ""
+        reason = f" - {event['reason']}" if event.get("reason") else ""
+        lines.append(f"{when} | {event['event']} | {event['confidence']}{sources}{reason}")
+    return "\n".join(lines)
 
 
 def parse_playlist(path: Path) -> list[str]:
@@ -172,6 +289,60 @@ def metadata_tracks(album_id: Any, metadata: dict[str, Any]) -> list[str]:
         title = row.get("title") or "(unknown)"
         out.append(f"{number:02d} - {title}")
     return out
+
+
+def _timeline_event(
+    event: str,
+    timestamp: Any,
+    confidence: Any,
+    reason: Any,
+    sources: list[Any],
+) -> dict[str, str]:
+    return {
+        "event": event,
+        "timestamp": str(timestamp or ""),
+        "confidence": _confidence(confidence, "MEDIUM"),
+        "reason": str(reason or ""),
+        "sources": ", ".join(str(source) for source in sources if source),
+    }
+
+
+def _first_timestamp(row: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value:
+            return str(value)
+    timestamps = row.get("timestamps")
+    if isinstance(timestamps, dict):
+        for key in keys:
+            value = timestamps.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _confidence(value: Any, fallback: str) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"}:
+        return text
+    return fallback
+
+
+def _source_list(*values: Any) -> list[Any]:
+    return [value for value in values if value]
+
+
+def _audit_passed(integrity: dict[str, Any], status: dict[str, Any]) -> bool:
+    health = status.get("health_percent")
+    try:
+        health_value = int(health)
+    except (TypeError, ValueError):
+        health_value = 0
+    warnings = integrity.get("warnings") if isinstance(integrity.get("warnings"), list) else []
+    checks = integrity.get("checks") if isinstance(integrity.get("checks"), list) else []
+    if checks and all(check.get("status") == "Present" for check in checks) and not warnings:
+        return True
+    return health_value >= 100
 
 
 def first_file(path: Path | None, suffixes: set[str]) -> Path | None:
