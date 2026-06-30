@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from datetime import datetime
+from types import SimpleNamespace
 import subprocess
 import json
 import threading
@@ -75,6 +76,13 @@ from audio_division.maintenance import (
     maintenance_summaries,
 )
 from audio_division.metadata_enrichment import rebuild_metadata_enrichment
+from audio_division.context_navigation import (
+    context_actions,
+    context_album_id,
+    context_deezer_link,
+    context_folder,
+    context_parent_folder,
+)
 from audio_division.acquisition_queue import (
     load_acquisition_queue,
     queue_release,
@@ -542,6 +550,7 @@ class DeezerCuratorGUI(tk.Tk):
         album_scroll.pack(side="right", fill="y")
         self.library_album_tree.configure(yscrollcommand=album_scroll.set)
         self.library_album_tree.bind("<<TreeviewSelect>>", self.on_library_album_selected)
+        self.library_album_tree.bind("<Button-3>", self.show_library_album_menu)
 
         details_frame = ttk.LabelFrame(browser, text="Album Details", padding=6)
         browser.add(details_frame, weight=4)
@@ -616,6 +625,7 @@ class DeezerCuratorGUI(tk.Tk):
             self.archive_album_tree.column(column, width=width, anchor="w")
         self.archive_album_tree.pack(fill="both", expand=True)
         self.archive_album_tree.bind("<<TreeviewSelect>>", self.on_archive_album_selected)
+        self.archive_album_tree.bind("<Button-3>", self.show_archive_album_menu)
 
         processing = ttk.LabelFrame(album_frame, text="Closed Loop Monitor", padding=4)
         processing.pack(fill="x", pady=(6, 0))
@@ -637,6 +647,7 @@ class DeezerCuratorGUI(tk.Tk):
             self.processing_queue_tree.heading(column, text=title)
             self.processing_queue_tree.column(column, width=width, anchor="w")
         self.processing_queue_tree.pack(fill="x", expand=False)
+        self.processing_queue_tree.bind("<Button-3>", self.show_incoming_album_menu)
         monitor_actions = ttk.Frame(processing)
         monitor_actions.pack(fill="x", pady=(4, 0))
         ttk.Button(monitor_actions, text="Open Folder", command=self.open_selected_incoming_folder).pack(side="left")
@@ -696,6 +707,7 @@ class DeezerCuratorGUI(tk.Tk):
             self.maintenance_album_tree.column(column, width=width, anchor="w")
         maintenance_panes.add(self.maintenance_album_tree, weight=2)
         self.maintenance_album_tree.bind("<Double-1>", lambda event: self.open_selected_maintenance_album())
+        self.maintenance_album_tree.bind("<Button-3>", self.show_maintenance_album_menu)
 
         maintenance_actions = ttk.Frame(maintenance)
         maintenance_actions.pack(fill="x", pady=(4, 0))
@@ -1917,6 +1929,144 @@ class DeezerCuratorGUI(tk.Tk):
             thumbnail,
         )
 
+    def show_archive_album_menu(self, event):
+        row = self._select_tree_row_at_event(self.archive_album_tree, self.archive_album_rows, event)
+        if not row:
+            return
+        self._show_context_menu(event, row, source="archive")
+
+    def show_incoming_album_menu(self, event):
+        row = self._select_tree_row_at_event(self.processing_queue_tree, self.closed_loop_rows, event)
+        if not row:
+            return
+        self._show_context_menu(event, row, source="incoming")
+
+    def show_maintenance_album_menu(self, event):
+        row = self._select_tree_row_at_event(self.maintenance_album_tree, self.maintenance_album_rows, event)
+        if not row:
+            return
+        self._show_context_menu(event, row, source="archive")
+
+    def show_library_album_menu(self, event):
+        row = self._select_tree_row_at_event(self.library_album_tree, self.library_album_rows, event)
+        if not row:
+            return
+        self._show_context_menu(event, row, source="archive")
+
+    def _select_tree_row_at_event(self, tree, rows: list[dict], event) -> dict:
+        item = tree.identify_row(event.y)
+        if not item:
+            return {}
+        tree.selection_set(item)
+        try:
+            index = int(item)
+        except ValueError:
+            index = tree.index(item)
+        return rows[index] if 0 <= index < len(rows) else {}
+
+    def _show_context_menu(self, event, row: dict, *, source: str):
+        menu = tk.Menu(self, tearoff=False)
+        actions = context_actions(row)
+        self._add_context_action(menu, "Jump to Archive", actions["jump_to_archive"], lambda: self.jump_context_to_archive(row))
+        self._add_context_action(menu, "Jump to Curator", actions["jump_to_curator"], lambda: self.jump_context_to_curator(row))
+        menu.add_separator()
+        self._add_context_action(menu, "Open Folder", actions["open_folder"], lambda: self.open_context_folder(row))
+        self._add_context_action(menu, "Open Parent Folder", actions["open_parent_folder"], lambda: self.open_context_parent_folder(row))
+        self._add_context_action(menu, "Reveal Incoming Folder", actions["reveal_incoming_folder"], lambda: self.open_context_folder(row))
+        menu.add_separator()
+        self._add_context_action(menu, "Copy Album ID", actions["copy_album_id"], lambda: self.copy_context_album_id(row))
+        self._add_context_action(menu, "Copy Deezer Link", actions["copy_deezer_link"], lambda: self.copy_context_deezer_link(row))
+        self._add_context_action(menu, "Show Identity", actions["show_identity"], lambda: self.show_context_identity(row))
+        menu.add_separator()
+        self._add_context_action(menu, "Revalidate", actions["revalidate"], lambda: self.revalidate_context_album(row))
+        self._add_context_action(menu, "Process Album", actions["process_album"], lambda: self.process_context_album(row, source=source))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _add_context_action(self, menu, label: str, enabled: bool, command):
+        menu.add_command(label=label, command=command, state="normal" if enabled else "disabled")
+
+    def jump_context_to_archive(self, row: dict):
+        if not row:
+            return
+        self.open_release_archive_workspace(self._context_release_proxy(row))
+
+    def jump_context_to_curator(self, row: dict):
+        album_id = context_album_id(row)
+        if not album_id:
+            return
+        self.tabs.select(1)
+        for index, candidate in enumerate(self.acquisition_rows):
+            if str(getattr(candidate, "deezer_album_id", "") or getattr(candidate, "album_id", "") or "") == album_id:
+                self.acquisition_tree.selection_set(str(index))
+                self.acquisition_tree.see(str(index))
+                self.selected_acquisition_release = candidate
+                self.selected_acquisition_release_id = self.acquisition_release_id(candidate)
+                self.status.config(text="Opened release in Curator.")
+                return
+        self.status.config(text="Release is not currently visible in Curator.")
+
+    def open_context_folder(self, row: dict):
+        folder = context_folder(row)
+        if folder:
+            self.set_archive_operation_result(run_operation("open_album_folder", folder, self.audio_settings, OPERATION_HISTORY_FILE))
+
+    def open_context_parent_folder(self, row: dict):
+        folder = context_parent_folder(row)
+        if folder:
+            self.set_archive_operation_result(run_operation("open_album_folder", folder, self.audio_settings, OPERATION_HISTORY_FILE))
+
+    def copy_context_album_id(self, row: dict):
+        album_id = context_album_id(row)
+        if album_id:
+            self.clipboard_clear()
+            self.clipboard_append(album_id)
+            self.status.config(text="Album ID copied.")
+
+    def copy_context_deezer_link(self, row: dict):
+        link = context_deezer_link(row)
+        if link:
+            self.clipboard_clear()
+            self.clipboard_append(link)
+            self.status.config(text="Deezer link copied.")
+
+    def show_context_identity(self, row: dict):
+        self.show_release_identity(self._context_release_proxy(row))
+
+    def revalidate_context_album(self, row: dict):
+        previous = self.archive_selected_album
+        self.archive_selected_album = row
+        self.run_archive_album_operation("revalidate_album")
+        if previous and row is not previous:
+            self.archive_selected_album = previous
+
+    def process_context_album(self, row: dict, *, source: str):
+        if source == "incoming":
+            self.processing_queue = queue_for_processing(self.processing_queue, queue_album_payload(row), source=row.get("source", "incoming"))
+            save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
+            self.refresh_processing_queue_view()
+            self.set_archive_operation_result("Incoming album queued for processing.")
+            return
+        previous = self.archive_selected_album
+        self.archive_selected_album = row
+        self.process_selected_archive_album()
+        if previous and row is not previous:
+            self.archive_selected_album = previous
+
+    def _context_release_proxy(self, row: dict):
+        return SimpleNamespace(
+            title=row.get("title") or row.get("album") or "",
+            artist=row.get("artist") or "",
+            deezer_album_id=context_album_id(row),
+            url=context_deezer_link(row),
+            archive_path=row.get("archive_path") or "",
+            archive_status=row.get("archive_status") or "",
+            lifecycle_state=row.get("lifecycle_state") or row.get("state") or "",
+            validation_status=row.get("validation_status") or "",
+            metadata_status=row.get("metadata_status") or "",
+            identity_confidence=row.get("identity_confidence") or "",
+            acquisition_recommendation=row.get("acquisition_recommendation") or row.get("pipeline_recommendation") or {},
+        )
+
     def run_archive_album_operation(self, operation_id: str):
         target, reason = album_archive_operation_target(self.archive_selected_album)
         if not target:
@@ -3011,10 +3161,10 @@ class DeezerCuratorGUI(tk.Tk):
         if not release:
             return
         self.selected_acquisition_release = release
+        row = self._release_context_row(release)
+        actions = context_actions(row)
         menu = tk.Menu(self, tearoff=False)
         has_url = bool(release.url)
-        has_archive = bool(release.archive_path)
-        download_folder = self.release_download_folder(release)
         queue_key = self.acquisition_release_id(release)
         in_worklist = bool(queue_key and queue_key in self.acquisition_queue.get("items", {}))
         menu.add_command(
@@ -3023,29 +3173,25 @@ class DeezerCuratorGUI(tk.Tk):
             state=tk.NORMAL if has_url else tk.DISABLED,
         )
         menu.add_separator()
+        self._add_context_action(menu, "Jump to Archive", actions["jump_to_archive"], lambda: self.jump_context_to_archive(row))
+        self._add_context_action(menu, "Jump to Curator", actions["jump_to_curator"], lambda: self.jump_context_to_curator(row))
+        menu.add_separator()
+        self._add_context_action(menu, "Open Folder", actions["open_folder"], lambda: self.open_context_folder(row))
+        self._add_context_action(menu, "Open Parent Folder", actions["open_parent_folder"], lambda: self.open_context_parent_folder(row))
+        self._add_context_action(menu, "Reveal Incoming Folder", actions["reveal_incoming_folder"], lambda: self.open_context_folder(row))
+        menu.add_separator()
         menu.add_command(
             label="Open on Deezer",
             command=lambda: webbrowser.open(release.url),
             state=tk.NORMAL if has_url else tk.DISABLED,
         )
-        menu.add_command(
-            label="Copy Deezer Link",
-            command=lambda: self.copy_release_link(release),
-            state=tk.NORMAL if has_url else tk.DISABLED,
-        )
+        self._add_context_action(menu, "Copy Album ID", actions["copy_album_id"], lambda: self.copy_context_album_id(row))
+        self._add_context_action(menu, "Copy Deezer Link", actions["copy_deezer_link"], lambda: self.copy_context_deezer_link(row))
         menu.add_separator()
-        menu.add_command(
-            label="Open Download Folder",
-            command=lambda: self.open_release_download_folder(release),
-            state=tk.NORMAL if download_folder else tk.DISABLED,
-        )
-        menu.add_command(
-            label="Show in Archive",
-            command=lambda: self.open_release_archive_workspace(release),
-            state=tk.NORMAL if has_archive else tk.DISABLED,
-        )
+        self._add_context_action(menu, "Show Identity", actions["show_identity"], lambda: self.show_release_identity(release))
         menu.add_separator()
-        menu.add_command(label="View Identity", command=lambda: self.show_release_identity(release))
+        self._add_context_action(menu, "Revalidate", actions["revalidate"], lambda: self.revalidate_context_album(row))
+        self._add_context_action(menu, "Process Album", actions["process_album"], lambda: self.process_context_album(row, source="archive"))
         menu.add_separator()
         menu.add_command(
             label="Remove From Worklist",
@@ -3053,6 +3199,23 @@ class DeezerCuratorGUI(tk.Tk):
             state=tk.NORMAL if in_worklist else tk.DISABLED,
         )
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _release_context_row(self, release) -> dict:
+        folder = self.release_download_folder(release)
+        return {
+            "artist": self.current_artist_model.artist_name if self.current_artist_model else "",
+            "title": release.title,
+            "album": release.title,
+            "deezer_album_id": release.deezer_album_id,
+            "album_id": release.deezer_album_id,
+            "url": release.url,
+            "archive_path": release.archive_path,
+            "folder": folder,
+            "identity_confidence": release.identity_confidence,
+            "validation_status": release.validation_status,
+            "metadata_status": release.metadata_status,
+            "lifecycle_state": release.lifecycle_state,
+        }
 
     def select_release_for_acquisition(self, release):
         self.selected_acquisition_release = release
@@ -3305,28 +3468,32 @@ class DeezerCuratorGUI(tk.Tk):
         row = self.queue_row_from_event(event)
         if not row:
             return
+        context_row = dict(row)
+        context_row["folder"] = row.get("incoming_folder") or row.get("folder") or ""
+        actions = context_actions(context_row)
         menu = tk.Menu(self, tearoff=False)
         has_url = bool(row.get("url"))
-        has_folder = bool(row.get("incoming_folder")) and Path(str(row.get("incoming_folder"))).exists()
         menu.add_command(label="Acquire", command=lambda: self.acquire_queue_album(row))
         menu.add_command(label="Remove From Worklist", command=lambda: self.remove_from_acquisition_queue(row))
+        menu.add_separator()
+        self._add_context_action(menu, "Jump to Archive", actions["jump_to_archive"], lambda: self.jump_context_to_archive(context_row))
+        self._add_context_action(menu, "Jump to Curator", actions["jump_to_curator"], lambda: self.jump_context_to_curator(context_row))
+        menu.add_separator()
+        self._add_context_action(menu, "Open Folder", actions["open_folder"], lambda: self.open_context_folder(context_row))
+        self._add_context_action(menu, "Open Parent Folder", actions["open_parent_folder"], lambda: self.open_context_parent_folder(context_row))
+        self._add_context_action(menu, "Reveal Incoming Folder", actions["reveal_incoming_folder"], lambda: self.open_context_folder(context_row))
         menu.add_separator()
         menu.add_command(
             label="Open on Deezer",
             command=lambda: webbrowser.open(row.get("url", "")),
             state=tk.NORMAL if has_url else tk.DISABLED,
         )
-        menu.add_command(
-            label="Copy Deezer Link",
-            command=lambda: self.copy_queue_link(row),
-            state=tk.NORMAL if has_url else tk.DISABLED,
-        )
+        self._add_context_action(menu, "Copy Album ID", actions["copy_album_id"], lambda: self.copy_context_album_id(context_row))
+        self._add_context_action(menu, "Copy Deezer Link", actions["copy_deezer_link"], lambda: self.copy_context_deezer_link(context_row))
+        self._add_context_action(menu, "Show Identity", actions["show_identity"], lambda: self.show_context_identity(context_row))
         menu.add_separator()
-        menu.add_command(
-            label="Open Download Folder",
-            command=lambda: self.open_queue_incoming_folder(row),
-            state=tk.NORMAL if has_folder else tk.DISABLED,
-        )
+        self._add_context_action(menu, "Revalidate", actions["revalidate"], lambda: self.revalidate_context_album(context_row))
+        self._add_context_action(menu, "Process Album", actions["process_album"], lambda: self.process_context_album(context_row, source="incoming"))
         menu.tk_popup(event.x_root, event.y_root)
 
     def acquire_queue_album(self, row: dict):
