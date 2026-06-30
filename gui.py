@@ -64,6 +64,7 @@ from audio_division.incoming_projection import incoming_releases
 from audio_division.audio_division_wrapper import process_validated_release
 from audio_division.validator_runner import run_validator_for_release
 from audio_division.pipeline_controller import recommend_next_action
+from audio_division.pipeline_dashboard import PIPELINE_STAGES, build_pipeline_dashboard
 from audio_division.maintenance import (
     maintenance_action_target,
     maintenance_albums,
@@ -251,6 +252,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
         self.processing_queue_rows: list[dict] = []
         self.closed_loop_rows: list[dict] = []
+        self.pipeline_stage_labels: dict[str, ttk.Label] = {}
+        self.pipeline_stage_trees: dict[str, ttk.Treeview] = {}
         self.maintenance_rows: list[dict] = []
         self.maintenance_album_rows: list[dict] = []
         self.selected_maintenance_id = ""
@@ -284,6 +287,9 @@ class DeezerCuratorGUI(tk.Tk):
     def _build_layout(self):
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill="both", expand=True)
+
+        pipeline_tab = ttk.Frame(self.tabs, padding=10)
+        self.tabs.add(pipeline_tab, text="Pipeline")
 
         curator_tab = ttk.Frame(self.tabs)
         self.tabs.add(curator_tab, text="Curator")
@@ -440,6 +446,7 @@ class DeezerCuratorGUI(tk.Tk):
         self._build_archive_tab(physical_archive_tab)
         self._build_library_tab(library_tab)
         self._build_artwork_tab(artwork_tab)
+        self._build_pipeline_tab(pipeline_tab)
         self._build_audio_dashboard(maintenance_tab)
         self._build_settings_tab(settings_tab)
 
@@ -1156,6 +1163,41 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.refresh_audio_dashboard()
 
+    def _build_pipeline_tab(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Label(toolbar, text="Pipeline dashboard: releases grouped by next workflow stage").pack(side="left")
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_pipeline_dashboard).pack(side="left", padx=(8, 0))
+
+        stages = ttk.Notebook(parent)
+        stages.pack(fill="both", expand=True)
+        for stage in PIPELINE_STAGES:
+            frame = ttk.Frame(stages, padding=8)
+            stages.add(frame, text=stage)
+            header = ttk.Frame(frame)
+            header.pack(fill="x", pady=(0, 8))
+            ttk.Label(header, text=stage).pack(side="left")
+            count_label = ttk.Label(header, text="0 releases")
+            count_label.pack(side="right")
+            self.pipeline_stage_labels[stage] = count_label
+
+            columns = ("artist", "album", "count", "next_action", "state")
+            tree = ttk.Treeview(frame, columns=columns, show="headings", height=18)
+            tree.heading("artist", text="Artist")
+            tree.heading("album", text="Album")
+            tree.heading("count", text="Count")
+            tree.heading("next_action", text="Recommended Next Action")
+            tree.heading("state", text="State")
+            tree.column("artist", width=210, anchor="w")
+            tree.column("album", width=300, anchor="w")
+            tree.column("count", width=70, anchor="center")
+            tree.column("next_action", width=190, anchor="w")
+            tree.column("state", width=160, anchor="w")
+            tree.pack(fill="both", expand=True)
+            self.pipeline_stage_trees[stage] = tree
+
+        self.refresh_pipeline_dashboard()
+
     def _build_settings_tab(self, parent):
         groups = [
             ("Roots", [
@@ -1197,6 +1239,64 @@ class DeezerCuratorGUI(tk.Tk):
         buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(buttons, text="Save Settings", command=self.save_audio_settings).pack(side="left")
         ttk.Button(buttons, text="Reload Settings", command=self.reload_audio_settings).pack(side="left", padx=(6, 0))
+
+    def refresh_pipeline_dashboard(self):
+        if not hasattr(self, "pipeline_stage_trees"):
+            return
+        identity = load_json(DATA_DIR / "identity_registry.json")
+        lifecycle = load_json(DATA_DIR / "lifecycle_registry.json")
+        archive_registry = load_json(DATA_DIR / "archive_registry.json")
+        metadata = load_json(DATA_DIR / "metadata_cache.json")
+
+        artist_releases = []
+        for presentation in load_artist_presentations(ARTISTS_DIR, DATA_DIR):
+            artist_name = presentation.artist.artist_name
+            for release in presentation.artist.releases:
+                row = {
+                    name: getattr(release, name)
+                    for name in dir(release)
+                    if not name.startswith("_") and not callable(getattr(release, name))
+                }
+                row["artist"] = artist_name
+                artist_releases.append(row)
+
+        incoming_rows = [
+            release.to_row()
+            for release in incoming_releases(
+                self.audio_settings,
+                identity_registry=identity,
+                lifecycle_registry=lifecycle,
+                archive_registry=archive_registry,
+                metadata_cache=metadata,
+                processing_queue=self.processing_queue,
+            )
+        ]
+        archive_albums = build_archive_albums(archive_registry, identity, metadata)
+        dashboard = build_pipeline_dashboard([*artist_releases, *incoming_rows, *archive_albums])
+
+        for stage in dashboard.get("stages", []):
+            name = stage.get("stage", "")
+            label = self.pipeline_stage_labels.get(name)
+            if label is not None:
+                label.config(text=f"{stage.get('count', 0)} releases")
+            tree = self.pipeline_stage_trees.get(name)
+            if tree is None:
+                continue
+            for item in tree.get_children():
+                tree.delete(item)
+            for index, row in enumerate(stage.get("items", [])):
+                tree.insert(
+                    "",
+                    tk.END,
+                    iid=str(index),
+                    values=(
+                        row.get("artist", ""),
+                        row.get("album", ""),
+                        row.get("count", 1),
+                        row.get("recommended_next_action", ""),
+                        row.get("state", ""),
+                    ),
+                )
 
     def refresh_audio_dashboard(self):
         summary = dashboard_summary(DATA_DIR)
@@ -1467,6 +1567,7 @@ class DeezerCuratorGUI(tk.Tk):
             )
         self.refresh_processing_queue_view()
         self.refresh_maintenance_view()
+        self.refresh_pipeline_dashboard()
         if restore_artist_key:
             artist_iid = f"artist:{restore_artist_key}"
             if self.archive_tree.exists(artist_iid):
@@ -1705,6 +1806,7 @@ class DeezerCuratorGUI(tk.Tk):
                     row.get("next_action", ""),
                 ),
             )
+        self.refresh_pipeline_dashboard()
 
     def release_pipeline_row(self, row: dict) -> dict:
         recommendation = recommend_next_action(row).to_dict()
