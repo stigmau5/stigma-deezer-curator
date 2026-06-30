@@ -135,6 +135,35 @@ def record_created(filename: str):
         save_meta(meta)
 
 
+def human_status(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    display = {
+        "READY_FOR_PROCESSING": "Ready to Process",
+        "READY_FOR_VALIDATION": "Ready to Validate",
+        "READY_TO_ACQUIRE": "Ready to Acquire",
+        "ALREADY_DOWNLOADED": "Already Downloaded",
+        "ALREADY_PROCESSING": "Already Processing",
+        "NEEDS_METADATA": "Needs Metadata",
+        "IDENTITY_REVIEW": "Identity Review",
+        "AVAILABLE_NOT_CACHED": "Available, Not Cached",
+        "WAITING VALIDATION": "Waiting Validation",
+        "READY FOR PROCESSING": "Ready to Process",
+    }
+    mapped = display.get(text.upper())
+    if mapped:
+        return mapped
+    normalized = text.replace("_", " ").replace("-", " ").lower()
+    words = []
+    for word in normalized.split():
+        if word in {"to", "for", "in", "on"}:
+            words.append(word)
+        else:
+            words.append(word.capitalize())
+    return " ".join(words)
+
+
 class Tooltip:
     def __init__(self, widget, text: str = ""):
         self.widget = widget
@@ -304,6 +333,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.artist_list = tk.Listbox(left)
         self.artist_list.pack(fill="both", expand=True)
         self.artist_list.bind("<<ListboxSelect>>", self.open_selected_artist)
+        self.artist_list.bind("<Button-3>", self.show_artist_menu)
 
         # ===== CENTER =====
         center = ttk.Frame(main, padding=6)
@@ -362,7 +392,7 @@ class DeezerCuratorGUI(tk.Tk):
         main.add(right, weight=2)
 
         ttk.Label(right, text="Acquisition Worklist").pack(anchor="w")
-        queue_columns = ("state", "artist", "album", "type", "action")
+        queue_columns = ("state", "artist", "album", "type", "source", "album_id")
         self.queue_tree = ttk.Treeview(
             right,
             columns=queue_columns,
@@ -374,7 +404,8 @@ class DeezerCuratorGUI(tk.Tk):
             ("artist", "Artist", 170),
             ("album", "Album", 260),
             ("type", "Type", 80),
-            ("action", "Action", 140),
+            ("source", "Source", 90),
+            ("album_id", "Album ID", 110),
         ):
             self.queue_tree.heading(column, text=title)
             self.queue_tree.column(column, width=width, anchor="w")
@@ -2350,6 +2381,102 @@ class DeezerCuratorGUI(tk.Tk):
         self.render_acquisition_grid(preserve_selection=False)
         record_created(presentation.projection_name)
 
+    def artist_presentation_from_event(self, event):
+        if event and getattr(event, "y", None) is not None:
+            index = self.artist_list.nearest(event.y)
+            bounds = self.artist_list.bbox(index)
+            if bounds and bounds[1] <= event.y <= bounds[1] + bounds[3] and 0 <= index < len(self.artist_presentations):
+                self.artist_list.selection_clear(0, tk.END)
+                self.artist_list.selection_set(index)
+                self.artist_list.activate(index)
+                return self.artist_presentations[index]
+        selection = self.artist_list.curselection()
+        if selection and selection[0] < len(self.artist_presentations):
+            return self.artist_presentations[selection[0]]
+        return None
+
+    def show_artist_menu(self, event):
+        presentation = self.artist_presentation_from_event(event)
+        if not presentation:
+            return
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="Update Artist", command=lambda: self.artist_menu_placeholder("Update Artist", presentation))
+        menu.add_command(label="Fetch New Releases", command=lambda: self.artist_menu_placeholder("Fetch New Releases", presentation))
+        menu.add_separator()
+        menu.add_command(label="Show Acquisition", command=lambda: self.show_artist_acquisition(presentation))
+        menu.add_command(label="Show Archive", command=lambda: self.show_artist_archive(presentation))
+        menu.add_command(label="Open Artist Folder", command=lambda: self.open_artist_folder(presentation))
+        menu.add_separator()
+        menu.add_command(label="Rebuild Projection", command=lambda: self.rebuild_artist_projection(presentation))
+        menu.add_command(label="Remove Artist", command=lambda: self.remove_artist_projection(presentation))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def artist_menu_placeholder(self, action: str, presentation):
+        self.status.config(text=f"{action} is managed by the curator workflow: {presentation.display_name}")
+
+    def show_artist_acquisition(self, presentation):
+        try:
+            index = self.artist_presentations.index(presentation)
+        except ValueError:
+            index = -1
+        if index >= 0:
+            self.artist_list.selection_clear(0, tk.END)
+            self.artist_list.selection_set(index)
+            self.artist_list.see(index)
+            self.open_selected_artist()
+
+    def show_artist_archive(self, presentation):
+        if not getattr(self, "archive_albums", []):
+            self.refresh_archive_browser()
+        artist_name = presentation.artist.artist_name.casefold()
+        album = next(
+            (
+                row
+                for row in self.archive_albums
+                if str(row.get("artist") or "").casefold() == artist_name
+            ),
+            {},
+        )
+        if not album:
+            self.status.config(text=f"No archive entry found for {presentation.display_name}")
+            return
+        self.open_archive_album(album)
+
+    def open_artist_folder(self, presentation):
+        folder = Path(presentation.projection_path).parent
+        if not folder.exists():
+            self.status.config(text="Artist folder not found")
+            return
+        subprocess.Popen(["xdg-open", str(folder)])
+
+    def rebuild_artist_projection(self, presentation):
+        self.current_artist_presentation = load_artist_presentation(presentation.projection_path, DATA_DIR)
+        self.current_artist_model = self.current_artist_presentation.artist
+        self.current_artist_filename = self.current_artist_presentation.projection_name
+        self.artist_release_lines = release_line_map(self.current_artist_model)
+        self.render_acquisition_grid(preserve_selection=True)
+        self.status.config(text=f"Rebuilt projection: {self.current_artist_presentation.display_name}")
+
+    def remove_artist_projection(self, presentation):
+        if not messagebox.askyesno(
+            "Remove Artist",
+            f"Remove acquisition projection for {presentation.display_name}?\n\n"
+            "Archive, metadata, downloads, identity, and history will not be touched.",
+        ):
+            return
+        path = Path(presentation.projection_path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        self.current_artist_presentation = None
+        self.current_artist_model = None
+        self.current_artist_filename = None
+        self.artist_release_lines = {}
+        self.refresh_artists()
+        self.render_acquisition_grid(preserve_selection=False)
+        self.status.config(text=f"Removed acquisition projection: {presentation.display_name}")
+
     def render_acquisition_grid(self, *, preserve_selection: bool = True):
         selected_ids, scroll_top = self.capture_acquisition_grid_state() if preserve_selection else (set(), 0.0)
         for item in self.acquisition_tree.get_children():
@@ -2370,15 +2497,15 @@ class DeezerCuratorGUI(tk.Tk):
                 tk.END,
                 iid=iid,
                 values=(
-                    recommendation,
+                    human_status(recommendation),
                     release.title,
                     release.year,
-                    release.type,
-                    release.archive_status,
-                    release.lifecycle_state,
-                    release.validation_status,
-                    release.metadata_status,
-                    release.identity_confidence,
+                    human_status(release.type),
+                    human_status(release.archive_status),
+                    human_status(release.lifecycle_state),
+                    human_status(release.validation_status),
+                    human_status(release.metadata_status),
+                    human_status(release.identity_confidence),
                 ),
             )
             if release_id in selected_ids:
@@ -2521,26 +2648,43 @@ class DeezerCuratorGUI(tk.Tk):
         menu = tk.Menu(self, tearoff=False)
         has_url = bool(release.url)
         has_archive = bool(release.archive_path)
+        download_folder = self.release_download_folder(release)
+        queue_key = self.acquisition_release_id(release)
+        in_worklist = bool(queue_key and queue_key in self.acquisition_queue.get("items", {}))
         menu.add_command(
             label="Acquire",
             command=lambda: self.select_release_for_acquisition(release),
             state=tk.NORMAL if has_url else tk.DISABLED,
         )
+        menu.add_separator()
         menu.add_command(
-            label="Open Archive",
-            command=lambda: self.open_release_archive_workspace(release),
-            state=tk.NORMAL if has_archive else tk.DISABLED,
-        )
-        menu.add_command(
-            label="Open Deezer",
+            label="Open on Deezer",
             command=lambda: webbrowser.open(release.url),
             state=tk.NORMAL if has_url else tk.DISABLED,
         )
-        menu.add_command(label="View Identity", command=lambda: self.show_release_identity(release))
         menu.add_command(
             label="Copy Deezer Link",
             command=lambda: self.copy_release_link(release),
             state=tk.NORMAL if has_url else tk.DISABLED,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Open Download Folder",
+            command=lambda: self.open_release_download_folder(release),
+            state=tk.NORMAL if download_folder else tk.DISABLED,
+        )
+        menu.add_command(
+            label="Show in Archive",
+            command=lambda: self.open_release_archive_workspace(release),
+            state=tk.NORMAL if has_archive else tk.DISABLED,
+        )
+        menu.add_separator()
+        menu.add_command(label="View Identity", command=lambda: self.show_release_identity(release))
+        menu.add_separator()
+        menu.add_command(
+            label="Remove From Worklist",
+            command=lambda: self.remove_release_from_worklist(release),
+            state=tk.NORMAL if in_worklist else tk.DISABLED,
         )
         menu.tk_popup(event.x_root, event.y_root)
 
@@ -2566,6 +2710,43 @@ class DeezerCuratorGUI(tk.Tk):
         self.copy_release_link(releases[0])
         return "break"
 
+    def release_download_folder(self, release) -> str:
+        album_id = str(getattr(release, "deezer_album_id", "") or "")
+        title = str(getattr(release, "title", "") or "").casefold()
+        artist = self.current_artist_model.artist_name.casefold() if self.current_artist_model else ""
+        rows = getattr(self, "closed_loop_rows", []) or []
+        if not rows and hasattr(self, "refresh_processing_queue_view"):
+            self.refresh_processing_queue_view()
+            rows = getattr(self, "closed_loop_rows", []) or []
+        for row in rows:
+            if album_id and str(row.get("album_id") or "") == album_id:
+                folder = str(row.get("folder") or "")
+                if folder and Path(folder).exists():
+                    return folder
+            row_artist = str(row.get("artist") or "").casefold()
+            row_album = str(row.get("album") or "").casefold()
+            if artist and title and row_artist == artist and row_album == title:
+                folder = str(row.get("folder") or "")
+                if folder and Path(folder).exists():
+                    return folder
+        return ""
+
+    def open_release_download_folder(self, release):
+        folder = self.release_download_folder(release)
+        if not folder:
+            self.status.config(text="No download folder found for release")
+            return
+        subprocess.Popen(["xdg-open", folder])
+
+    def remove_release_from_worklist(self, release):
+        key = self.acquisition_release_id(release)
+        if not key:
+            self.status.config(text="Release has no worklist identity")
+            return
+        self.acquisition_queue = remove_queue_item(self.acquisition_queue, key)
+        self.persist_acquisition_queue()
+        self.status.config(text=f"Removed from worklist: {release.title}")
+
     def show_selected_release_identity(self):
         releases = self.selected_artist_releases()
         if not releases:
@@ -2582,12 +2763,12 @@ class DeezerCuratorGUI(tk.Tk):
                     f"Album: {release.title}",
                     f"Deezer album ID: {release.deezer_album_id}",
                     f"Artist: {self.current_artist_model.artist_name if self.current_artist_model else ''}",
-                    f"Identity confidence: {release.identity_confidence}",
+                    f"Identity confidence: {human_status(release.identity_confidence)}",
                     f"Archive path: {release.archive_path or 'not archived'}",
-                    f"Lifecycle: {release.lifecycle_state}",
-                    f"Validation: {release.validation_status}",
-                    f"Metadata: {release.metadata_status}",
-                    f"Recommendation: {recommendation.get('recommendation', 'UNKNOWN')}",
+                    f"Lifecycle: {human_status(release.lifecycle_state)}",
+                    f"Validation: {human_status(release.validation_status)}",
+                    f"Metadata: {human_status(release.metadata_status)}",
+                    f"Recommendation: {human_status(recommendation.get('recommendation', 'UNKNOWN'))}",
                     f"Reason: {recommendation.get('reason', '')}",
                     f"Next action: {recommendation.get('next_action', '')}",
                 ]
@@ -2624,18 +2805,31 @@ class DeezerCuratorGUI(tk.Tk):
         if not album:
             self.status.config(text="Archive row not found for release")
             return
+        self.open_archive_album(album)
+        self.status.config(text=f"Opened archive workspace: {release.title}")
+
+    def open_archive_album(self, album: dict):
         if hasattr(self, "archive_tab"):
             self.tabs.select(self.archive_tab)
         if hasattr(self, "archive_sections"):
             self.archive_sections.select(0)
         artist_iid = f"artist:{album.get('artist_key', '')}"
         if hasattr(self, "archive_tree") and self.archive_tree.exists(artist_iid):
+            parent = self.archive_tree.parent(artist_iid)
+            if parent:
+                self.archive_tree.item(parent, open=True)
+            self.archive_tree.item(artist_iid, open=True)
             self.archive_tree.selection_set(artist_iid)
+            self.archive_tree.focus(artist_iid)
             self.archive_tree.see(artist_iid)
             self._load_archive_artist_albums(album.get("artist_key", ""), self._archive_album_key(album), None)
+            selection = self.archive_album_tree.selection()
+            if selection:
+                self.archive_album_tree.focus(selection[0])
+                self.archive_album_tree.see(selection[0])
+                self.archive_album_tree.focus_set()
         self.archive_selected_album = album
         self.set_archive_detail(album)
-        self.status.config(text=f"Opened archive workspace: {release.title}")
 
     # ---------------- Inbox ----------------
 
@@ -2692,11 +2886,12 @@ class DeezerCuratorGUI(tk.Tk):
                 tk.END,
                 iid=str(index),
                 values=(
-                    row.get("current_state", ""),
+                    human_status(row.get("current_state", "")),
                     row.get("artist", ""),
                     row.get("album", ""),
-                    row.get("release_type", ""),
-                    row.get("action", ""),
+                    human_status(row.get("release_type", "")),
+                    "Deezer" if row.get("url") else "",
+                    row.get("deezer_album_id", ""),
                 ),
             )
 
@@ -2731,10 +2926,11 @@ class DeezerCuratorGUI(tk.Tk):
                     f"Artist: {row.get('artist', '')}",
                     f"Album: {row.get('album', '')}",
                     f"Release Type: {row.get('release_type', '')}",
+                    "Source: Deezer" if row.get("url") else "Source: ",
                     f"Deezer Album ID: {row.get('deezer_album_id', '')}",
                     f"URL: {row.get('url', '')}",
                     f"Added Time: {row.get('queued_time', '')}",
-                    f"Current State: {row.get('current_state', '')}",
+                    f"Current State: {human_status(row.get('current_state', ''))}",
                 ]
             ),
         )
@@ -2744,11 +2940,27 @@ class DeezerCuratorGUI(tk.Tk):
         if not row:
             return
         menu = tk.Menu(self, tearoff=False)
-        menu.add_command(label="Acquire Album", command=lambda: self.acquire_queue_album(row))
+        has_url = bool(row.get("url"))
+        has_folder = bool(row.get("incoming_folder")) and Path(str(row.get("incoming_folder"))).exists()
+        menu.add_command(label="Acquire", command=lambda: self.acquire_queue_album(row))
         menu.add_command(label="Remove From Worklist", command=lambda: self.remove_from_acquisition_queue(row))
-        menu.add_command(label="Open Deezer", command=lambda: webbrowser.open(row.get("url", "")))
-        menu.add_command(label="Copy Link", command=lambda: self.copy_queue_link(row))
-        menu.add_command(label="Open Incoming Folder", command=lambda: self.open_queue_incoming_folder(row))
+        menu.add_separator()
+        menu.add_command(
+            label="Open on Deezer",
+            command=lambda: webbrowser.open(row.get("url", "")),
+            state=tk.NORMAL if has_url else tk.DISABLED,
+        )
+        menu.add_command(
+            label="Copy Deezer Link",
+            command=lambda: self.copy_queue_link(row),
+            state=tk.NORMAL if has_url else tk.DISABLED,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Open Download Folder",
+            command=lambda: self.open_queue_incoming_folder(row),
+            state=tk.NORMAL if has_folder else tk.DISABLED,
+        )
         menu.tk_popup(event.x_root, event.y_root)
 
     def acquire_queue_album(self, row: dict):
