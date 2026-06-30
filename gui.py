@@ -1698,6 +1698,17 @@ class DeezerCuratorGUI(tk.Tk):
             or {}
         )
 
+    def resolve_archive_workspace_album(self, details: dict) -> dict:
+        if not details:
+            return {}
+        active = active_album_from_row(details)
+        physical = self.find_active_archive_album(active)
+        if physical and physical is not details:
+            self.archive_selected_album = physical
+            self.active_archive_album = active_album_from_row(physical)
+            return physical
+        return details
+
     def preserve_archive_workspace(self):
         if self.archive_selected_album:
             self.set_archive_detail(self.archive_selected_album)
@@ -1885,6 +1896,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_archive_detail(self.archive_selected_album)
 
     def set_archive_detail(self, details: dict):
+        details = self.resolve_archive_workspace_album(details)
+        if details:
+            self.archive_selected_album = details
+            self.active_archive_album = active_album_from_row(details)
         workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"), getattr(self, "archive_albums", []))
         presentation = workspace.get("presentation", {})
         sections = presentation.get("sections", {})
@@ -2033,11 +2048,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.show_release_identity(self._context_release_proxy(row))
 
     def revalidate_context_album(self, row: dict):
-        previous = self.archive_selected_album
-        self.archive_selected_album = row
+        self.archive_selected_album = self.resolve_archive_workspace_album(row)
         self.run_archive_album_operation("revalidate_album")
-        if previous and row is not previous:
-            self.archive_selected_album = previous
 
     def process_context_album(self, row: dict, *, source: str):
         if source == "incoming":
@@ -2046,11 +2058,8 @@ class DeezerCuratorGUI(tk.Tk):
             self.refresh_processing_queue_view()
             self.set_archive_operation_result("Incoming album queued for processing.")
             return
-        previous = self.archive_selected_album
-        self.archive_selected_album = row
+        self.archive_selected_album = self.resolve_archive_workspace_album(row)
         self.process_selected_archive_album()
-        if previous and row is not previous:
-            self.archive_selected_album = previous
 
     def _context_release_proxy(self, row: dict):
         return SimpleNamespace(
@@ -2072,19 +2081,10 @@ class DeezerCuratorGUI(tk.Tk):
         if not target:
             self.set_archive_operation_result(f"Failure: {reason}")
             return
-        active_tab = self.tabs.select()
-        selection = capture_archive_selection(
-            self.archive_selected_album,
-            active_tab=active_tab,
-            album_yview=self.archive_album_tree.yview(),
-        )
+        selection = self.capture_active_archive_context(active_tab=self.tabs.select())
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
         self.set_archive_operation_result(result)
-        self.refresh_archive_browser(
-            restore_album_key=selection.album_key,
-            restore_artist_key=selection.artist_key,
-            restore_album_yview=selection.album_yview,
-        )
+        self.restore_active_archive_context(selection)
         if selection.active_tab:
             self.tabs.select(selection.active_tab)
         self.refresh_audio_dashboard()
@@ -2112,11 +2112,7 @@ class DeezerCuratorGUI(tk.Tk):
         if not target:
             self.set_archive_operation_result(f"Failure: {reason}")
             return
-        selection = capture_archive_selection(
-            self.archive_selected_album,
-            active_tab=self.tabs.select(),
-            album_yview=self.archive_album_tree.yview(),
-        )
+        selection = self.capture_active_archive_context(active_tab=self.tabs.select())
         self.processing_queue = queue_for_processing(self.processing_queue, self.archive_selected_album, source="archive")
         save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
         reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
@@ -2130,11 +2126,7 @@ class DeezerCuratorGUI(tk.Tk):
             OPERATION_HISTORY_FILE,
         )
         self.set_archive_operation_result(result)
-        self.refresh_archive_browser(
-            restore_album_key=selection.album_key,
-            restore_artist_key=selection.artist_key,
-            restore_album_yview=selection.album_yview,
-        )
+        self.restore_active_archive_context(selection)
         if selection.active_tab:
             self.tabs.select(selection.active_tab)
         self.refresh_audio_dashboard()

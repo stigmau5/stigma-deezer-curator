@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from audio_division.active_album import (
     ActiveAlbum,
@@ -8,6 +10,7 @@ from audio_division.active_album import (
     find_active_album,
     restore_active_album,
 )
+from audio_division.album_workspace import album_workspace
 
 
 class ActiveAlbumTests(unittest.TestCase):
@@ -58,6 +61,50 @@ class ActiveAlbumTests(unittest.TestCase):
         for operation in operations:
             with self.subTest(operation=operation):
                 self.assertEqual(restore_active_album(refreshed, active)["title"], "Restored")
+
+    def test_refresh_rebinds_presentation_album_to_physical_archive_row(self):
+        with TemporaryDirectory() as tmp:
+            album_path = Path(tmp) / "Artist - Album"
+            album_path.mkdir()
+            (album_path / "01.flac").write_bytes(b"audio")
+            (album_path / "release.nfo").write_text("nfo", encoding="utf-8")
+            (album_path / "release.sfv").write_text("01.flac 00000000", encoding="utf-8")
+            (album_path / "album.m3u8").write_text("#EXTM3U\n01.flac\n", encoding="utf-8")
+            (album_path / "cover.jpg").write_bytes(b"cover")
+            (album_path / "STIGMA_VALIDATED.txt").write_text("validated", encoding="utf-8")
+
+            selected = {
+                "album_id": "42",
+                "artist_key": "artist",
+                "artist": "Artist",
+                "title": "Album",
+                "archive_path": str(album_path),
+                "identity_confidence": "HIGH",
+            }
+            active = active_album_from_row(selected)
+            presentation_only = {
+                "album_id": "42",
+                "artist_key": "artist",
+                "artist": "Artist",
+                "title": "Album",
+                "identity_confidence": "HIGH",
+            }
+
+            restored = restore_active_album([selected], active, presentation_only)
+            workspace = album_workspace(restored)
+            integrity = {check["id"]: check for check in workspace["integrity"]["checks"]}
+
+            self.assertEqual(restored["archive_path"], str(album_path))
+            self.assertEqual(restored["album_id"], presentation_only["album_id"])
+            self.assertEqual(workspace["cover"]["status"], "Present")
+            self.assertEqual(workspace["files"]["source"], "filesystem")
+            self.assertIn("01.flac", workspace["files"]["items"])
+            self.assertEqual(workspace["nfo"]["status"], "Present")
+            self.assertEqual(workspace["tracklist"]["source"], "playlist")
+            self.assertEqual(integrity["artwork"]["status"], "Present")
+            self.assertEqual(integrity["nfo"]["status"], "Present")
+            self.assertEqual(integrity["playlist"]["status"], "Present")
+            self.assertEqual(integrity["audio_files"]["status"], "Present")
 
 
 if __name__ == "__main__":
