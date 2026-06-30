@@ -713,86 +713,124 @@ class DeezerCuratorGUI(tk.Tk):
         self.layout_panes["archive_workspace"] = workspace
 
         summary = ttk.Panedwindow(workspace, orient="horizontal")
-        workspace.add(summary, weight=2)
+        workspace.add(summary, weight=3)
 
-        visual = ttk.Frame(summary)
-        summary.add(visual, weight=1)
-        cover_box = ttk.Frame(visual, width=280, height=240)
-        cover_box.pack(fill="x", pady=(0, 8))
+        visual = ttk.Frame(summary, padding=(0, 0, 10, 0))
+        summary.add(visual, weight=2)
+        album_visual = ttk.LabelFrame(visual, text="Album", padding=10)
+        album_visual.pack(fill="both", expand=True, pady=(0, 10))
+        cover_box = ttk.Frame(album_visual, width=360, height=320)
+        cover_box.pack(fill="both", expand=True, pady=(0, 10))
         cover_box.pack_propagate(False)
         self.archive_thumbnail = tk.Label(cover_box, text="No artwork", anchor="center", relief="sunken", bg="white")
         self.archive_thumbnail.pack(fill="both", expand=True)
-        self.archive_cover_title = ttk.Label(visual, text="", anchor="center", justify="center", wraplength=280)
+        self.archive_cover_title = ttk.Label(album_visual, text="", anchor="center", justify="center", wraplength=340)
         self.archive_cover_title.pack(fill="x", pady=(0, 8))
-        self.archive_artwork_status = ttk.Label(visual, text="Artwork: Unknown", wraplength=280)
-        self.archive_artwork_status.pack(anchor="w", fill="x", pady=(0, 8))
+        self.archive_artwork_status = ttk.Label(album_visual, text="Artwork: Unknown", wraplength=340)
+        self.archive_artwork_status.pack(anchor="w", fill="x")
 
-        status = ttk.LabelFrame(visual, text="Status", padding=6)
-        status.pack(fill="x", pady=(0, 8))
+        integrity = ttk.LabelFrame(visual, text="Integrity", padding=10)
+        integrity.pack(fill="both", expand=True)
+        status = ttk.Frame(integrity)
+        status.pack(fill="x", pady=(0, 10))
         self.archive_status_glance_labels: dict[str, ttk.Label] = {}
         for idx, field in enumerate(("Validation", "NFO", "SFV", "Playlist", "Artwork", "Readiness", "Health")):
-            ttk.Label(status, text=f"{field}:").grid(row=idx // 2, column=(idx % 2) * 2, sticky="w", padx=(0, 6), pady=1)
+            ttk.Label(status, text=f"{field}:").grid(row=idx // 2, column=(idx % 2) * 2, sticky="w", padx=(0, 8), pady=2)
             value = ttk.Label(status, text="Unknown")
-            value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 10), pady=1)
+            value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=2)
             self.archive_status_glance_labels[field] = value
 
-        integrity = ttk.LabelFrame(visual, text="Album Integrity", padding=6)
-        integrity.pack(fill="x", pady=(0, 8))
-        self.archive_integrity_text = tk.Text(integrity, height=9, wrap="word", font="TkFixedFont")
-        self.archive_integrity_text.pack(fill="x")
+        self.archive_integrity_text = tk.Text(integrity, height=8, wrap="word", font="TkFixedFont")
+        self.archive_integrity_text.pack(fill="both", expand=True)
         self.archive_integrity_text.config(state="disabled")
 
-        operations = ttk.LabelFrame(visual, text="Operations", padding=6)
-        operations.pack(fill="x")
-        ttk.Button(operations, text="Revalidate", command=lambda: self.run_archive_album_operation("revalidate_album")).grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=(0, 3))
-        ttk.Button(operations, text="NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).grid(row=0, column=1, sticky="ew", pady=(0, 3))
-        ttk.Button(operations, text="SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).grid(row=1, column=0, sticky="ew", padx=(0, 3))
-        ttk.Button(operations, text="Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=1, column=1, sticky="ew")
-        ttk.Button(operations, text="Play Album", command=lambda: self.run_archive_album_playback("play_album")).grid(row=2, column=0, sticky="ew", padx=(0, 3), pady=(3, 0))
-        ttk.Button(operations, text="Playlist", command=lambda: self.run_archive_album_playback("play_playlist")).grid(row=2, column=1, sticky="ew", pady=(3, 0))
-        ttk.Button(operations, text="Queue", command=self.queue_selected_archive_album_for_processing).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
-        ttk.Button(operations, text="Process Album", command=self.process_selected_archive_album).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(3, 0))
-        operations.columnconfigure(0, weight=1)
-        operations.columnconfigure(1, weight=1)
-        ttk.Label(operations, textvariable=self.archive_operation_result_var, wraplength=280).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-
         self.archive_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
-        details = ttk.Frame(summary)
+        details = ttk.Frame(summary, padding=(10, 0, 0, 0))
         summary.add(details, weight=3)
         details.columnconfigure(0, weight=1)
-        details.columnconfigure(1, weight=1)
-        details.rowconfigure(1, weight=1)
-        for index, (section_id, title, fields) in enumerate((
-            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type", "Lifecycle state", "Lifecycle evidence", "Lifecycle reason")),
-            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Contributors", "Metadata status")),
-            ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
-        )):
-            row = 0 if index < 2 else 1
-            column = index if index < 2 else 0
-            columnspan = 1 if index < 2 else 2
-            frame = ttk.LabelFrame(details, text=title, padding=6)
-            frame.grid(row=row, column=column, columnspan=columnspan, sticky="nsew", padx=(0 if column == 0 else 6, 0), pady=(0, 6))
-            details.rowconfigure(row, weight=1)
-            for field_row, field in enumerate(fields):
-                ttk.Label(frame, text=f"{field}:").grid(row=field_row, column=0, sticky="nw", padx=(0, 6), pady=1)
-                value = ttk.Label(frame, text="", wraplength=360)
-                value.grid(row=field_row, column=1, sticky="ew", pady=1)
-                frame.columnconfigure(1, weight=1)
-                self.archive_presentation_labels[(section_id, field)] = value
-                if section_id == "identity" and field == "Archive path":
-                    self.archive_path_label = value
-                    self.archive_path_tooltip = Tooltip(value)
+        for row in range(5):
+            details.rowconfigure(row, weight=1 if row in (0, 2) else 0)
+
+        album_frame = ttk.LabelFrame(details, text="Album", padding=10)
+        album_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        album_frame.columnconfigure(1, weight=1)
+        album_fields = (
+            ("overview", "Album title"),
+            ("overview", "Artist"),
+            ("overview", "Year"),
+            ("overview", "Record type"),
+            ("metadata", "Label"),
+            ("metadata", "Genre"),
+            ("metadata", "Release date"),
+            ("metadata", "Track count"),
+            ("metadata", "Contributors"),
+            ("metadata", "Metadata status"),
+            ("overview", "Lifecycle state"),
+            ("overview", "Lifecycle evidence"),
+            ("overview", "Lifecycle reason"),
+        )
+        for field_row, (section_id, field) in enumerate(album_fields):
+            ttk.Label(album_frame, text=f"{field}:").grid(row=field_row, column=0, sticky="nw", padx=(0, 10), pady=2)
+            value = ttk.Label(album_frame, text="", wraplength=520)
+            value.grid(row=field_row, column=1, sticky="ew", pady=2)
+            self.archive_presentation_labels[(section_id, field)] = value
         for hidden_field in ("Cached fields", "Missing fields"):
             self.archive_presentation_labels[("metadata", hidden_field)] = ttk.Label(details)
+
+        identity_frame = ttk.LabelFrame(details, text="Identity", padding=10)
+        identity_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        identity_frame.columnconfigure(1, weight=1)
+        for field_row, field in enumerate(("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")):
+            ttk.Label(identity_frame, text=f"{field}:").grid(row=field_row, column=0, sticky="nw", padx=(0, 10), pady=2)
+            value = ttk.Label(identity_frame, text="", wraplength=520)
+            value.grid(row=field_row, column=1, sticky="ew", pady=2)
+            self.archive_presentation_labels[("identity", field)] = value
+            if field == "Archive path":
+                self.archive_path_label = value
+                self.archive_path_tooltip = Tooltip(value)
+
+        timeline = ttk.LabelFrame(details, text="Timeline", padding=10)
+        timeline.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+        ttk.Label(timeline, text="Timeline will appear here as lifecycle events become available.").pack(anchor="w")
+
+        actions = ttk.LabelFrame(details, text="Actions", padding=10)
+        actions.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        for column in range(3):
+            actions.columnconfigure(column, weight=1)
+        ttk.Button(actions, text="Process Album", command=self.process_selected_archive_album).grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(0, 8))
+        ttk.Button(actions, text="Validate Album", command=lambda: self.run_archive_album_operation("validate_album")).grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(0, 8))
+        ttk.Button(actions, text="Open Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=0, column=2, sticky="ew", pady=(0, 8))
+        ttk.Label(actions, textvariable=self.archive_operation_result_var, wraplength=560).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+
+        more_visible = tk.BooleanVar(value=False)
+        more_frame = ttk.Frame(actions)
+        more_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
+        more_frame.grid_remove()
+
+        def toggle_more_actions():
+            if more_visible.get():
+                more_frame.grid()
+            else:
+                more_frame.grid_remove()
+
+        ttk.Checkbutton(actions, text="More...", variable=more_visible, command=toggle_more_actions).grid(row=2, column=0, columnspan=3, sticky="w")
+        for column in range(3):
+            more_frame.columnconfigure(column, weight=1)
+        ttk.Button(more_frame, text="Revalidate", command=lambda: self.run_archive_album_operation("revalidate_album")).grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(6, 4))
+        ttk.Button(more_frame, text="Generate NFO", command=lambda: self.run_archive_album_operation("generate_nfo")).grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(6, 4))
+        ttk.Button(more_frame, text="Generate SFV", command=lambda: self.run_archive_album_operation("generate_sfv")).grid(row=0, column=2, sticky="ew", pady=(6, 4))
+        ttk.Button(more_frame, text="Play Album", command=lambda: self.run_archive_album_playback("play_album")).grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(0, 4))
+        ttk.Button(more_frame, text="Play Playlist", command=lambda: self.run_archive_album_playback("play_playlist")).grid(row=1, column=1, sticky="ew", padx=(0, 6), pady=(0, 4))
+        ttk.Button(more_frame, text="Queue", command=self.queue_selected_archive_album_for_processing).grid(row=1, column=2, sticky="ew", pady=(0, 4))
+
         related = ttk.LabelFrame(details, text="Related Albums", padding=6)
-        related.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(0, 6))
-        details.rowconfigure(2, weight=1)
-        self.archive_relationships_text = tk.Text(related, height=7, wrap="word", font="TkFixedFont")
+        related.grid(row=4, column=0, sticky="nsew")
+        self.archive_relationships_text = tk.Text(related, height=5, wrap="word", font="TkFixedFont")
         self.archive_relationships_text.pack(fill="both", expand=True)
         self.archive_relationships_text.config(state="disabled")
 
         evidence = ttk.Panedwindow(workspace, orient="horizontal")
-        workspace.add(evidence, weight=5)
+        workspace.add(evidence, weight=4)
         self.layout_panes["archive_evidence"] = evidence
         files_frame = ttk.LabelFrame(evidence, text="Files", padding=6)
         evidence.add(files_frame, weight=1)
