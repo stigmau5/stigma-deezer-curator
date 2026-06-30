@@ -62,6 +62,7 @@ from audio_division.processing_queue import (
 from audio_division.closed_loop_monitor import queue_album_payload
 from audio_division.incoming_projection import incoming_releases
 from audio_division.integration import run_audio_division_process_album
+from audio_division.validator_runner import run_validator_for_release
 from audio_division.maintenance import (
     maintenance_action_target,
     maintenance_albums,
@@ -620,6 +621,7 @@ class DeezerCuratorGUI(tk.Tk):
         monitor_actions = ttk.Frame(processing)
         monitor_actions.pack(fill="x", pady=(4, 0))
         ttk.Button(monitor_actions, text="Open Folder", command=self.open_selected_incoming_folder).pack(side="left")
+        ttk.Button(monitor_actions, text="Validate Download", command=self.validate_selected_incoming_release).pack(side="left", padx=(4, 0))
         ttk.Button(monitor_actions, text="Queue For Processing", command=self.queue_selected_incoming_album).pack(side="left", padx=(4, 0))
 
         maintenance = ttk.LabelFrame(album_frame, text="Maintenance Action Center", padding=4)
@@ -1722,6 +1724,28 @@ class DeezerCuratorGUI(tk.Tk):
         save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
         self.refresh_processing_queue_view()
         self.archive_operation_result_var.set("Incoming album queued for processing.")
+
+    def validate_selected_incoming_release(self):
+        row = self.selected_incoming_album()
+        if not row:
+            self.archive_operation_result_var.set("Failure: no incoming album selected.")
+            return
+        reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
+        if not reports_dir.is_absolute():
+            reports_dir = BASE_DIR / reports_dir
+        result = run_validator_for_release(
+            row,
+            self.audio_settings,
+            DATA_DIR,
+            reports_dir,
+            OPERATION_HISTORY_FILE,
+        )
+        self.refresh_archive_browser()
+        self.refresh_processing_queue_view()
+        self.refresh_audio_dashboard()
+        self.archive_operation_result_var.set(
+            f"Validate Download: {result['result'].title()} - exit {result['exit_code']}"
+        )
 
     def refresh_maintenance_view(self):
         if not hasattr(self, "maintenance_tree"):
