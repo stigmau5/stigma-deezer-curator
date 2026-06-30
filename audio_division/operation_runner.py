@@ -6,6 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from audio_division.action_routing import (
+    apply_guidance,
+    command_failure_guidance,
+    missing_tool_guidance,
+    operation_tool_id,
+)
 from audio_division.operations import default_operations
 from curator.atomic import atomic_write_text
 
@@ -50,7 +56,8 @@ def validate_operation_request(operation_id: str, target: str, settings: dict[st
     if not target:
         return False, "Target folder is required"
     if operation_id != "open_album_folder" and not _tool_path(operation_id, settings):
-        return False, f"Tool path is not configured for {operation_id}"
+        guidance = missing_tool_guidance(operation_tool_id(operation_id))
+        return False, f"{guidance.message} {guidance.suggested_action}"
     return True, "ok"
 
 
@@ -73,20 +80,28 @@ def run_operation(
     valid, message = validate_operation_request(operation_id, target, settings)
     if not valid:
         result = _result(operation_id, target, False, message, batch_id=batch_id)
+        if "not configured" in message:
+            apply_guidance(result, missing_tool_guidance(operation_tool_id(operation_id)))
         record_operation_history(history_path, result)
         return result
 
     command = prepare_command(operation_id, target, settings)
+    guidance = None
     try:
         completed = runner(command, capture_output=True, text=True, timeout=3600)
         success = completed.returncode == 0
         output = (completed.stdout or completed.stderr or "").strip()
         message = output or ("completed" if success else f"failed with exit code {completed.returncode}")
+        if not success and "permission denied" in message.lower():
+            guidance = command_failure_guidance(operation_tool_id(operation_id), command, message)
+            message = guidance.message
     except Exception as exc:
         success = False
-        message = str(exc)
+        guidance = command_failure_guidance(operation_tool_id(operation_id), command, exc)
+        message = guidance.message
 
     result = _result(operation_id, target, success, message, batch_id=batch_id)
+    apply_guidance(result, guidance)
     record_operation_history(history_path, result)
     return result
 

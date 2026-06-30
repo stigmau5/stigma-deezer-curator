@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from audio_division.dashboard import compute_dashboard_summary
 from audio_division.operation_runner import (
@@ -109,7 +110,27 @@ class OperationRunnerTests(unittest.TestCase):
             history = load_operation_history(history_path)
 
         self.assertEqual(result["result"], "failure")
+        self.assertEqual(result["message"], "FLAC Validator is not configured.")
+        self.assertEqual(result["guidance"]["suggested_action"], "Open Settings > Tools and set Validator.")
         self.assertEqual(history["history"][0]["result"], "failure")
+
+    def test_permission_failure_records_actionable_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            history_path = Path(tmp) / "operation_history.json"
+            result = run_operation(
+                "validate_album",
+                "/tmp/album",
+                {"tools": {"flac_validator_path": "/tools/validator"}},
+                history_path,
+                runner=Mock(side_effect=PermissionError("Permission denied")),
+            )
+
+        self.assertEqual(result["result"], "failure")
+        self.assertIn("FLAC Validator", result["message"])
+        self.assertIn("Permission denied", result["message"])
+        self.assertIn("Command attempted: /tools/validator /tmp/album", result["message"])
+        self.assertEqual(result["guidance"]["settings_route"], "settings.tools")
+        self.assertEqual(result["guidance"]["action_label"], "Open Settings")
 
     def test_settings_integration(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from audio_division.validator_runner import run_validator_for_release
 
@@ -88,8 +89,29 @@ class ValidatorRunnerTests(unittest.TestCase):
             result = run_validator_for_release({"folder": str(album)}, {"tools": {}}, data_dir)
 
         self.assertEqual(result["result"], "failure")
-        self.assertIn("not configured", result["stderr"])
+        self.assertEqual(result["stderr"], "FLAC Validator is not configured. Open Settings > Tools and set Validator.")
+        self.assertEqual(result["guidance"]["action_label"], "Open Settings")
         self.assertFalse((data_dir / "validated_albums.json").exists())
+
+    def test_permission_failure_names_validator_and_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            data_dir = project / "data"
+            album = project / "incoming" / "Example-Answer"
+            album.mkdir(parents=True)
+
+            result = run_validator_for_release(
+                {"folder": str(album)},
+                {"tools": {"flac_validator_path": "/tools/validator"}},
+                data_dir,
+                runner=Mock(side_effect=PermissionError("Permission denied")),
+            )
+
+        self.assertEqual(result["result"], "failure")
+        self.assertIn("FLAC Validator", result["stderr"])
+        self.assertIn("Command attempted:", result["stderr"])
+        self.assertIn(str(album), result["stderr"])
+        self.assertEqual(result["guidance"]["settings_route"], "settings.tools")
 
 
 if __name__ == "__main__":

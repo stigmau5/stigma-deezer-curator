@@ -219,6 +219,8 @@ class DeezerCuratorGUI(tk.Tk):
 
         self.audio_settings = load_audio_division_settings(AUDIO_DIVISION_SETTINGS_FILE)
         self.audio_setting_vars: dict[tuple[str, str], tk.StringVar] = {}
+        self.settings_sections = None
+        self.settings_tool_tab = None
         self.tool_status_labels: dict[str, ttk.Label] = {}
         self.tool_resolved_labels: dict[str, ttk.Label] = {}
         self.tool_version_labels: dict[str, ttk.Label] = {}
@@ -310,6 +312,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         settings_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(settings_tab, text="Settings")
+        self.settings_tab = settings_tab
 
         self.archive_sections = ttk.Notebook(archive_tab)
         self.archive_sections.pack(fill="both", expand=True)
@@ -801,6 +804,9 @@ class DeezerCuratorGUI(tk.Tk):
         ttk.Button(actions, text="Validate Album", command=lambda: self.run_archive_album_operation("validate_album")).grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(0, 8))
         ttk.Button(actions, text="Open Folder", command=lambda: self.run_archive_album_operation("open_album_folder")).grid(row=0, column=2, sticky="ew", pady=(0, 8))
         ttk.Label(actions, textvariable=self.archive_operation_result_var, wraplength=560).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        self.archive_open_settings_button = ttk.Button(actions, text="Open Settings", command=self.open_settings_tools)
+        self.archive_open_settings_button.grid(row=2, column=2, sticky="e", pady=(0, 4))
+        self.archive_open_settings_button.grid_remove()
 
         more_visible = tk.BooleanVar(value=False)
         more_frame = ttk.Frame(actions)
@@ -813,7 +819,7 @@ class DeezerCuratorGUI(tk.Tk):
             else:
                 more_frame.grid_remove()
 
-        ttk.Checkbutton(actions, text="More...", variable=more_visible, command=toggle_more_actions).grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(actions, text="More...", variable=more_visible, command=toggle_more_actions).grid(row=2, column=0, sticky="w")
         for column in range(3):
             more_frame.columnconfigure(column, weight=1)
         ttk.Button(more_frame, text="Revalidate", command=lambda: self.run_archive_album_operation("revalidate_album")).grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(6, 4))
@@ -1246,6 +1252,7 @@ class DeezerCuratorGUI(tk.Tk):
     def _build_settings_tab(self, parent):
         sections = ttk.Notebook(parent)
         sections.pack(fill="both", expand=True)
+        self.settings_sections = sections
 
         roots = ttk.Frame(sections, padding=10)
         sections.add(roots, text="Roots")
@@ -1268,6 +1275,7 @@ class DeezerCuratorGUI(tk.Tk):
 
         tools = ttk.Frame(sections, padding=10)
         sections.add(tools, text="Tools")
+        self.settings_tool_tab = tools
         ttk.Label(
             tools,
             text="External tools are discovered without execution. Legacy NFO and SFV tool paths remain supported in saved settings.",
@@ -1346,6 +1354,31 @@ class DeezerCuratorGUI(tk.Tk):
             version = self.tool_version_labels.get(tool_id)
             if version is not None:
                 version.config(text=discovery.version)
+
+    def open_settings_tools(self):
+        if hasattr(self, "settings_tab"):
+            self.tabs.select(self.settings_tab)
+        if self.settings_sections is not None and self.settings_tool_tab is not None:
+            self.settings_sections.select(self.settings_tool_tab)
+        self.refresh_tool_settings_status()
+
+    def set_archive_operation_result(self, result_or_message):
+        if isinstance(result_or_message, dict):
+            detail = result_or_message.get("message") or result_or_message.get("stderr") or ""
+            message = f"{result_or_message.get('result', 'failure').title()}: {detail}"
+            guidance = result_or_message.get("guidance")
+        else:
+            message = str(result_or_message)
+            guidance = None
+        self.archive_operation_result_var.set(message)
+        button = getattr(self, "archive_open_settings_button", None)
+        if button is None:
+            return
+        if isinstance(guidance, dict) and guidance.get("settings_route"):
+            button.config(text=str(guidance.get("action_label") or "Open Settings"))
+            button.grid()
+        else:
+            button.grid_remove()
 
     def refresh_pipeline_dashboard(self):
         if not hasattr(self, "pipeline_stage_trees"):
@@ -1694,12 +1727,12 @@ class DeezerCuratorGUI(tk.Tk):
         try:
             result = rebuild_metadata_enrichment(DATA_DIR, reports_dir)
         except OSError as exc:
-            self.archive_operation_result_var.set(f"Metadata refresh failed: {exc}")
+            self.set_archive_operation_result(f"Metadata refresh failed: {exc}")
             return
         self.restore_active_archive_context(selection)
         if selection.active_tab:
             self.tabs.select(selection.active_tab)
-        self.archive_operation_result_var.set(
+        self.set_archive_operation_result(
             f"Metadata refreshed: {result['albums_enriched']}/{result['albums_evaluated']} albums enriched."
         )
 
@@ -1884,7 +1917,7 @@ class DeezerCuratorGUI(tk.Tk):
     def run_archive_album_operation(self, operation_id: str):
         target, reason = album_archive_operation_target(self.archive_selected_album)
         if not target:
-            self.archive_operation_result_var.set(f"Failure: {reason}")
+            self.set_archive_operation_result(f"Failure: {reason}")
             return
         active_tab = self.tabs.select()
         selection = capture_archive_selection(
@@ -1893,7 +1926,7 @@ class DeezerCuratorGUI(tk.Tk):
             album_yview=self.archive_album_tree.yview(),
         )
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
-        self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
+        self.set_archive_operation_result(result)
         self.refresh_archive_browser(
             restore_album_key=selection.album_key,
             restore_artist_key=selection.artist_key,
@@ -1906,25 +1939,25 @@ class DeezerCuratorGUI(tk.Tk):
     def run_archive_album_playback(self, operation_id: str):
         target, reason = album_archive_operation_target(self.archive_selected_album)
         if not target:
-            self.archive_operation_result_var.set(f"Failure: {reason}")
+            self.set_archive_operation_result(f"Failure: {reason}")
             return
         result = run_playback_action(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
-        self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
+        self.set_archive_operation_result(result)
         self.refresh_audio_dashboard()
 
     def queue_selected_archive_album_for_processing(self):
         if not self.archive_selected_album:
-            self.archive_operation_result_var.set("Failure: select an album first")
+            self.set_archive_operation_result("Failure: select an album first")
             return
         self.processing_queue = queue_for_processing(self.processing_queue, self.archive_selected_album, source="archive")
         save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
         self.refresh_processing_queue_view()
-        self.archive_operation_result_var.set("Queued for processing.")
+        self.set_archive_operation_result("Queued for processing.")
 
     def process_selected_archive_album(self):
         target, reason = album_archive_operation_target(self.archive_selected_album)
         if not target:
-            self.archive_operation_result_var.set(f"Failure: {reason}")
+            self.set_archive_operation_result(f"Failure: {reason}")
             return
         selection = capture_archive_selection(
             self.archive_selected_album,
@@ -1943,7 +1976,7 @@ class DeezerCuratorGUI(tk.Tk):
             reports_dir,
             OPERATION_HISTORY_FILE,
         )
-        self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
+        self.set_archive_operation_result(result)
         self.refresh_archive_browser(
             restore_album_key=selection.album_key,
             restore_artist_key=selection.artist_key,
@@ -2005,15 +2038,15 @@ class DeezerCuratorGUI(tk.Tk):
     def open_selected_incoming_folder(self):
         row = self.selected_incoming_album()
         if not row:
-            self.archive_operation_result_var.set("Failure: no incoming album selected.")
+            self.set_archive_operation_result("Failure: no incoming album selected.")
             return
         result = run_operation("open_album_folder", row.get("folder", ""), self.audio_settings, OPERATION_HISTORY_FILE)
-        self.archive_operation_result_var.set(f"Open Folder: {result['result'].title()} - {result['message']}")
+        self.set_archive_operation_result(result)
 
     def queue_selected_incoming_album(self):
         row = self.selected_incoming_album()
         if not row:
-            self.archive_operation_result_var.set("Failure: no incoming album selected.")
+            self.set_archive_operation_result("Failure: no incoming album selected.")
             return
         self.processing_queue = queue_for_processing(
             self.processing_queue,
@@ -2022,12 +2055,12 @@ class DeezerCuratorGUI(tk.Tk):
         )
         save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
         self.refresh_processing_queue_view()
-        self.archive_operation_result_var.set("Incoming album queued for processing.")
+        self.set_archive_operation_result("Incoming album queued for processing.")
 
     def validate_selected_incoming_release(self):
         row = self.selected_incoming_album()
         if not row:
-            self.archive_operation_result_var.set("Failure: no incoming album selected.")
+            self.set_archive_operation_result("Failure: no incoming album selected.")
             return
         reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
         if not reports_dir.is_absolute():
@@ -2042,9 +2075,10 @@ class DeezerCuratorGUI(tk.Tk):
         self.refresh_archive_browser()
         self.refresh_processing_queue_view()
         self.refresh_audio_dashboard()
-        self.archive_operation_result_var.set(
-            f"Validate Download: {result['result'].title()} - exit {result['exit_code']}"
-        )
+        if result.get("result") == "failure":
+            self.set_archive_operation_result(result)
+        else:
+            self.set_archive_operation_result(f"Validate Download: Success - exit {result['exit_code']}")
 
     def refresh_maintenance_view(self):
         if not hasattr(self, "maintenance_tree"):
@@ -2120,7 +2154,7 @@ class DeezerCuratorGUI(tk.Tk):
     def open_selected_maintenance_album(self):
         album = self.selected_maintenance_album()
         if not album:
-            self.archive_operation_result_var.set("Failure: no maintenance album selected.")
+            self.set_archive_operation_result("Failure: no maintenance album selected.")
             return
         artist_iid = f"artist:{album.get('artist_key', '')}"
         if self.archive_tree.exists(artist_iid):
@@ -2129,23 +2163,23 @@ class DeezerCuratorGUI(tk.Tk):
             self._load_archive_artist_albums(album.get("artist_key", ""), self._archive_album_key(album), None)
         self.archive_selected_album = album
         self.set_archive_detail(album)
-        self.archive_operation_result_var.set("Album opened in workspace.")
+        self.set_archive_operation_result("Album opened in workspace.")
 
     def run_recommended_maintenance_operation(self):
         album = self.selected_maintenance_album()
         if not album:
-            self.archive_operation_result_var.set("Failure: no maintenance album selected.")
+            self.set_archive_operation_result("Failure: no maintenance album selected.")
             return
         self.run_maintenance_operation(maintenance_operation_for_album(album))
 
     def run_maintenance_operation(self, operation_id: str):
         album = self.selected_maintenance_album()
         if not album:
-            self.archive_operation_result_var.set("Failure: no maintenance album selected.")
+            self.set_archive_operation_result("Failure: no maintenance album selected.")
             return
         resolved_operation, target, reason = maintenance_action_target(operation_id, album)
         if not target:
-            self.archive_operation_result_var.set(f"Failure: {reason}")
+            self.set_archive_operation_result(f"Failure: {reason}")
             return
         selection = capture_archive_selection(
             album,
@@ -2153,9 +2187,7 @@ class DeezerCuratorGUI(tk.Tk):
             album_yview=self.archive_album_tree.yview(),
         )
         result = run_operation(resolved_operation, target, self.audio_settings, OPERATION_HISTORY_FILE)
-        self.archive_operation_result_var.set(
-            f"{resolved_operation}: {result['result'].title()} - {result['message']}"
-        )
+        self.set_archive_operation_result(result)
         self.refresh_archive_browser(
             restore_album_key=selection.album_key,
             restore_artist_key=selection.artist_key,

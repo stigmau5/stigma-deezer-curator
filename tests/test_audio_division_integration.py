@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from audio_division.integration import (
     AUDIO_DIVISION_OPERATION,
@@ -44,7 +45,10 @@ class AudioDivisionIntegrationTests(unittest.TestCase):
 
     def test_request_validation(self):
         self.assertEqual(validate_process_album_request("", self.settings()), (False, "Album folder is required"))
-        self.assertEqual(validate_process_album_request("/archive/Album", {"tools": {}}), (False, "Audio Division Path is not configured"))
+        self.assertEqual(
+            validate_process_album_request("/archive/Album", {"tools": {}}),
+            (False, "Audio Division is not configured. Open Settings > Tools and set Audio Division."),
+        )
         self.assertEqual(validate_process_album_request("/archive/Album", self.settings()), (True, "ok"))
 
     def test_execution_wrapper_records_history(self):
@@ -68,6 +72,22 @@ class AudioDivisionIntegrationTests(unittest.TestCase):
         self.assertEqual(result["operation"], AUDIO_DIVISION_OPERATION)
         self.assertEqual(result["result"], "success")
         self.assertEqual(history["history"][0]["operation"], AUDIO_DIVISION_OPERATION)
+
+    def test_permission_failure_names_tool_and_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            history_path = Path(tmp) / "operation_history.json"
+            result = run_audio_division_process_album(
+                "/archive/Artist-Album",
+                self.settings(),
+                history_path,
+                runner=Mock(side_effect=PermissionError("Permission denied")),
+            )
+
+        self.assertEqual(result["result"], "failure")
+        self.assertIn("Audio Division", result["message"])
+        self.assertIn("Command attempted:", result["message"])
+        self.assertIn("process-album", result["message"])
+        self.assertEqual(result["guidance"]["action_label"], "Open Settings")
 
     def test_processing_queue_state_before_execution(self):
         album = {

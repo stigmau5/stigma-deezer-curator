@@ -26,6 +26,7 @@ def process_validated_release(
         return {
             "result": "failure",
             "message": process_result.get("message", ""),
+            "guidance": process_result.get("guidance", {}),
             "process": process_result,
             "archive_refresh": {},
             "verification": {},

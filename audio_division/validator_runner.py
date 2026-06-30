@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from audio_division.action_routing import command_failure_guidance, missing_tool_guidance
 from audio_division.operation_runner import record_operation_history
 from curator.atomic import atomic_write_text
 from curator.identity import build_identity_registry, write_identity_registry, write_identity_reports
@@ -35,18 +36,29 @@ def run_validator_for_release(
     if not folder.exists() or not folder.is_dir():
         return _failure("Release folder does not exist.", folder=str(folder), started_at=started_at)
     if not validator:
-        return _failure("FLAC Validator Path is not configured.", folder=str(folder), started_at=started_at)
+        guidance = missing_tool_guidance("validator")
+        return _failure(
+            f"{guidance.message} {guidance.suggested_action}",
+            folder=str(folder),
+            started_at=started_at,
+            guidance=guidance.to_dict(),
+        )
 
     command = [validator, str(folder)]
+    guidance = None
     try:
         completed = runner(command, capture_output=True, text=True, timeout=3600)
         exit_code = int(getattr(completed, "returncode", 1))
         stdout = str(getattr(completed, "stdout", "") or "")
         stderr = str(getattr(completed, "stderr", "") or "")
+        if exit_code != 0 and "permission denied" in (stdout + stderr).lower():
+            guidance = command_failure_guidance("validator", command, stdout or stderr)
+            stderr = guidance.message
     except Exception as exc:
         exit_code = 1
         stdout = ""
-        stderr = str(exc)
+        guidance = command_failure_guidance("validator", command, exc)
+        stderr = guidance.message
 
     finished_at = datetime.now().isoformat(timespec="seconds")
     log_path = folder / VALIDATOR_LOG_NAME
@@ -92,6 +104,8 @@ def run_validator_for_release(
         "album_id": album_id,
         "refreshed": refreshed,
     }
+    if guidance is not None:
+        result["guidance"] = guidance.to_dict()
     _record_validator_run(data_dir / "validator_runs.json", result)
     if history_path is not None:
         record_operation_history(
@@ -107,9 +121,9 @@ def run_validator_for_release(
     return result
 
 
-def _failure(message: str, *, folder: str, started_at: str) -> dict[str, Any]:
+def _failure(message: str, *, folder: str, started_at: str, guidance: dict[str, Any] | None = None) -> dict[str, Any]:
     finished_at = datetime.now().isoformat(timespec="seconds")
-    return {
+    result = {
         "operation": "validate_downloaded_release",
         "target": folder,
         "command": [],
@@ -124,6 +138,9 @@ def _failure(message: str, *, folder: str, started_at: str) -> dict[str, Any]:
         "album_id": "",
         "refreshed": {},
     }
+    if guidance:
+        result["guidance"] = guidance
+    return result
 
 
 def _record_validated_album(
