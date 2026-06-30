@@ -61,7 +61,7 @@ from audio_division.processing_queue import (
 )
 from audio_division.closed_loop_monitor import queue_album_payload
 from audio_division.incoming_projection import incoming_releases
-from audio_division.integration import run_audio_division_process_album
+from audio_division.audio_division_wrapper import process_validated_release
 from audio_division.validator_runner import run_validator_for_release
 from audio_division.maintenance import (
     maintenance_action_target,
@@ -1652,7 +1652,16 @@ class DeezerCuratorGUI(tk.Tk):
         )
         self.processing_queue = queue_for_processing(self.processing_queue, self.archive_selected_album, source="archive")
         save_processing_queue(PROCESSING_QUEUE_FILE, self.processing_queue)
-        result = run_audio_division_process_album(target, self.audio_settings, OPERATION_HISTORY_FILE)
+        reports_dir = Path(self.audio_settings.get("reports", {}).get("reports_directory") or BASE_DIR / "reports")
+        if not reports_dir.is_absolute():
+            reports_dir = BASE_DIR / reports_dir
+        result = process_validated_release(
+            target,
+            self.audio_settings,
+            DATA_DIR,
+            reports_dir,
+            OPERATION_HISTORY_FILE,
+        )
         self.archive_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
         self.refresh_archive_browser(
             restore_album_key=selection.album_key,
