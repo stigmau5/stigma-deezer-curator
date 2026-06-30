@@ -59,10 +59,8 @@ from audio_division.processing_queue import (
     queue_for_processing,
     save_processing_queue,
 )
-from audio_division.closed_loop_monitor import (
-    discover_incoming_albums,
-    queue_album_payload,
-)
+from audio_division.closed_loop_monitor import queue_album_payload
+from audio_division.incoming_projection import incoming_releases
 from audio_division.integration import run_audio_division_process_album
 from audio_division.maintenance import (
     maintenance_action_target,
@@ -604,12 +602,13 @@ class DeezerCuratorGUI(tk.Tk):
         processing.pack(fill="x", pady=(6, 0))
         self.processing_queue_tree = ttk.Treeview(
             processing,
-            columns=("album", "source", "folder", "state"),
+            columns=("artist", "album", "source", "folder", "state"),
             show="headings",
             height=5,
             selectmode="browse",
         )
         for column, title, width in (
+            ("artist", "Artist", 140),
             ("album", "Album", 210),
             ("source", "Source", 80),
             ("folder", "Folder", 220),
@@ -1665,11 +1664,17 @@ class DeezerCuratorGUI(tk.Tk):
     def refresh_processing_queue_view(self):
         if not hasattr(self, "processing_queue_tree"):
             return
-        self.processing_queue_rows = discover_incoming_albums(
-            self.audio_settings,
-            self.archive_albums,
-            self.processing_queue,
-        )
+        self.processing_queue_rows = [
+            release.to_row()
+            for release in incoming_releases(
+                self.audio_settings,
+                identity_registry=load_json(DATA_DIR / "identity_registry.json"),
+                lifecycle_registry=load_json(DATA_DIR / "lifecycle_registry.json"),
+                archive_registry=load_json(DATA_DIR / "archive_registry.json"),
+                metadata_cache=load_json(DATA_DIR / "metadata_cache.json"),
+                processing_queue=self.processing_queue,
+            )
+        ]
         self.closed_loop_rows = self.processing_queue_rows
         for item in self.processing_queue_tree.get_children():
             self.processing_queue_tree.delete(item)
@@ -1679,6 +1684,7 @@ class DeezerCuratorGUI(tk.Tk):
                 tk.END,
                 iid=str(index),
                 values=(
+                    row.get("artist", ""),
                     row.get("album", ""),
                     row.get("source", ""),
                     self._shorten_path(row.get("folder", ""), max_chars=38),
