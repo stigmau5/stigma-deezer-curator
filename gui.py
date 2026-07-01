@@ -46,6 +46,7 @@ from audio_division.archive_audit import audit_archive, write_archive_audit
 from audio_division.revalidation import revalidate_archive, write_archive_revalidation_report
 from audio_division.album_workspace import album_workspace
 from audio_division.active_album import ActiveAlbum, active_album_from_row, active_album_index, restore_active_album
+from audio_division.canonical_album import AlbumRef, CanonicalAlbumResolver
 from audio_division.artwork_browser import artwork_items, filter_artwork_items
 from audio_division.cover_widget import CoverWidget
 from audio_division.physical_archive import (
@@ -912,6 +913,9 @@ class DeezerCuratorGUI(tk.Tk):
                 value.grid(row=row, column=1, sticky="ew", pady=1)
                 frame.columnconfigure(1, weight=1)
                 self.library_presentation_labels[(section_id, field)] = value
+                if section_id == "identity" and field == "Archive path":
+                    self.library_path_label = value
+                    self.library_path_tooltip = Tooltip(value)
         related_frame = ttk.LabelFrame(middle, text="Related Albums", padding=6)
         middle.add(related_frame, weight=1)
         self.library_relationships_text = tk.Text(related_frame, height=10, wrap="word", font="TkFixedFont")
@@ -1197,91 +1201,162 @@ class DeezerCuratorGUI(tk.Tk):
 
     def set_archive_detail(self, details: dict):
         details = self.resolve_archive_workspace_album(details)
-        if details:
-            self.archive_selected_album = details
-            self.active_archive_album = active_album_from_row(details)
-        else:
-            self._set_archive_empty_state()
+        canonical, workspace = self.update_album_workspace("archive", details)
+        if not canonical:
             return
-        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"), getattr(self, "archive_albums", []))
+        self.archive_selected_album = canonical
+        self.active_archive_album = active_album_from_row(canonical)
+        self._update_archive_header(canonical, workspace)
+        self._update_archive_operation_enablement(canonical, workspace)
+
+    def update_album_workspace(self, target: str, details: dict) -> tuple[dict, dict]:
+        if not details:
+            self._set_album_workspace_empty_state(target)
+            return {}, {}
+        canonical_album = self.resolve_canonical_album(details)
+        canonical = canonical_album.details
+        if not canonical:
+            self._set_album_workspace_empty_state(target)
+            return {}, {}
+        metadata = load_json(DATA_DIR / "metadata_cache.json")
+        workspace = album_workspace(canonical, metadata, self._workspace_collection_albums())
         presentation = workspace.get("presentation", {})
         sections = presentation.get("sections", {})
-        for (section_id, field), label in self.archive_presentation_labels.items():
+        presentation_labels = getattr(self, f"{target}_presentation_labels", {})
+        for (section_id, field), label in presentation_labels.items():
             value = ""
             for item_field, item_value in sections.get(section_id, []):
                 if item_field == field:
                     value = item_value
                     break
             label.config(text=str(value or ""))
-        title = str(details.get("title") or "")
-        self.archive_cover_title.config(text=title)
-        full_path = str(details.get("archive_path") or "")
-        if hasattr(self, "archive_path_label"):
-            self.archive_path_label.config(text=self._shorten_path(full_path))
-            self.archive_path_tooltip.set_text(full_path)
+        title = str(canonical.get("title") or "")
+        cover_title = getattr(self, f"{target}_cover_title", None)
+        if cover_title is not None:
+            cover_title.config(text=title)
+        full_path = str(canonical.get("archive_path") or "")
+        path_label = getattr(self, f"{target}_path_label", None)
+        path_tooltip = getattr(self, f"{target}_path_tooltip", None)
+        if path_label is not None:
+            path_label.config(text=self._shorten_path(full_path))
+        if path_tooltip is not None:
+            path_tooltip.set_text(full_path)
+        status_labels = getattr(self, f"{target}_status_glance_labels", {})
         for field, value in workspace.get("status_glance", []):
-            if field in self.archive_status_glance_labels:
-                self.archive_status_glance_labels[field].config(text=str(value or "Unknown"))
-        self._update_archive_header(details, workspace)
-        self._set_archive_thumbnail(workspace.get("cover", {}))
+            if field in status_labels:
+                status_labels[field].config(text=str(value or "Unknown"))
+        self._set_workspace_thumbnail(target, workspace.get("cover", {}))
         integrity_text = self._format_integrity(workspace.get("integrity", {}))
-        self._set_text_widget(self.archive_integrity_text, integrity_text)
-        if hasattr(self, "archive_integrity_tab_text"):
-            self._set_text_widget(self.archive_integrity_tab_text, integrity_text)
-        self._set_text_widget(self.archive_relationships_text, workspace.get("relationships_text", ""))
+        integrity_widget = getattr(self, f"{target}_integrity_text", None)
+        if integrity_widget is not None:
+            self._set_text_widget(integrity_widget, integrity_text)
+        tab_integrity_widget = getattr(self, f"{target}_integrity_tab_text", None)
+        if tab_integrity_widget is not None:
+            self._set_text_widget(tab_integrity_widget, integrity_text)
+        relationships_widget = getattr(self, f"{target}_relationships_text", None)
+        if relationships_widget is not None:
+            self._set_text_widget(relationships_widget, workspace.get("relationships_text", ""))
         files = workspace.get("files", {})
         files_text = self._format_archive_files(files, selected=bool(details), archive_path=full_path)
-        self._set_text_widget(
-            self.archive_files_text,
-            files_text,
-        )
+        files_widget = getattr(self, f"{target}_files_text", None)
+        if files_widget is not None:
+            self._set_text_widget(files_widget, files_text)
         nfo = workspace.get("nfo", {})
-        self.archive_current_nfo = nfo
-        self.archive_current_tracklist = workspace.get("tracklist", {})
-        self.archive_view_nfo_button.config(state="normal" if nfo.get("path") else "disabled")
-        if hasattr(self, "archive_view_nfo_tooltip"):
-            self.archive_view_nfo_tooltip.set_text("" if nfo.get("path") else self._archive_evidence_reason("nfo", selected=True, archive_path=full_path))
-        self._set_text_widget(
-            self.archive_nfo_text,
-            self._format_archive_nfo(nfo, selected=True, archive_path=full_path),
+        setattr(self, f"{target}_current_nfo", nfo)
+        if target == "archive":
+            self.archive_current_tracklist = workspace.get("tracklist", {})
+        view_nfo_button = getattr(self, f"{target}_view_nfo_button", None)
+        if view_nfo_button is not None:
+            view_nfo_button.config(state="normal" if nfo.get("path") else "disabled")
+        view_nfo_tooltip = getattr(self, f"{target}_view_nfo_tooltip", None)
+        if view_nfo_tooltip is not None:
+            view_nfo_tooltip.set_text("" if nfo.get("path") else self._archive_evidence_reason("nfo", selected=True, archive_path=full_path))
+        nfo_widget = getattr(self, f"{target}_nfo_text", None)
+        if nfo_widget is not None:
+            self._set_text_widget(nfo_widget, self._format_archive_nfo(nfo, selected=True, archive_path=full_path))
+        return canonical, workspace
+
+    def resolve_canonical_album(self, details: dict):
+        return self.canonical_album_resolver().resolve(AlbumRef.from_row(details))
+
+    def canonical_album_resolver(self) -> CanonicalAlbumResolver:
+        archive_root = self.audio_settings.get("archive_paths", {}).get("main_archive_root", "")
+        return CanonicalAlbumResolver(
+            archive_registry=load_json(DATA_DIR / "archive_registry.json"),
+            identity_registry=load_json(DATA_DIR / "identity_registry.json"),
+            lifecycle_registry=load_json(DATA_DIR / "lifecycle_registry.json"),
+            metadata_cache=load_json(DATA_DIR / "metadata_cache.json"),
+            archive_root=Path(archive_root) if archive_root else None,
         )
-        self._update_archive_operation_enablement(details, workspace)
+
+    def _workspace_collection_albums(self) -> list[dict]:
+        rows: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for album in list(getattr(self, "archive_albums", [])) + list(getattr(self, "library_data", {}).get("albums", [])):
+            key = (str(album.get("album_id") or ""), str(album.get("archive_path") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(album)
+        return rows
+
+    def _set_workspace_thumbnail(self, target: str, thumbnail: dict):
+        label = getattr(self, f"{target}_thumbnail", None)
+        status_label = getattr(self, f"{target}_artwork_status", None)
+        if label is None:
+            return
+        image = self._set_album_cover(label, status_label, thumbnail)
+        setattr(self, f"{target}_thumbnail_image", image)
 
     def _set_archive_empty_state(self):
+        self._set_album_workspace_empty_state("archive")
+
+    def _set_album_workspace_empty_state(self, target: str):
         if hasattr(self, "archive_header_artist_var"):
-            self.archive_header_artist_var.set("Select an album")
-            self.archive_header_album_var.set("Select a release to view evidence.")
-            self.archive_header_year_var.set("")
-            for field, label in self.archive_header_badges.items():
-                label.config(text=f"{field}: No selection")
-        for (section_id, field), label in getattr(self, "archive_presentation_labels", {}).items():
+            if target == "archive":
+                self.archive_header_artist_var.set("Select an album")
+                self.archive_header_album_var.set("Select a release to view evidence.")
+                self.archive_header_year_var.set("")
+                for field, label in self.archive_header_badges.items():
+                    label.config(text=f"{field}: No selection")
+        for (section_id, field), label in getattr(self, f"{target}_presentation_labels", {}).items():
             label.config(text="")
-        if hasattr(self, "archive_cover_title"):
-            self.archive_cover_title.config(text="Select an album to inspect.")
-        if hasattr(self, "archive_thumbnail"):
-            self.archive_thumbnail.config(image="", text="No album selected")
-        if hasattr(self, "archive_artwork_status"):
-            self.archive_artwork_status.config(text="No artwork because no album is selected.")
-        for label in getattr(self, "archive_status_glance_labels", {}).values():
+        cover_title = getattr(self, f"{target}_cover_title", None)
+        if cover_title is not None:
+            cover_title.config(text="Select an album to inspect.")
+        thumbnail = getattr(self, f"{target}_thumbnail", None)
+        if thumbnail is not None:
+            thumbnail.config(image="", text="No album selected")
+        artwork_status = getattr(self, f"{target}_artwork_status", None)
+        if artwork_status is not None:
+            artwork_status.config(text="No artwork because no album is selected.")
+        for label in getattr(self, f"{target}_status_glance_labels", {}).values():
             label.config(text="No selection")
         empty_text = "Select an album to inspect."
-        if hasattr(self, "archive_integrity_text"):
-            self._set_text_widget(self.archive_integrity_text, empty_text)
-        if hasattr(self, "archive_integrity_tab_text"):
-            self._set_text_widget(self.archive_integrity_tab_text, empty_text)
-        if hasattr(self, "archive_relationships_text"):
-            self._set_text_widget(self.archive_relationships_text, "Select a release to view related albums.")
-        if hasattr(self, "archive_files_text"):
-            self._set_text_widget(self.archive_files_text, "Select a release to view filesystem evidence.")
-        if hasattr(self, "archive_nfo_text"):
-            self._set_text_widget(self.archive_nfo_text, "Select a release to view NFO evidence.")
-        self.archive_current_nfo = {}
-        self.archive_current_tracklist = {}
-        if hasattr(self, "archive_view_nfo_button"):
-            self.archive_view_nfo_button.config(state="disabled")
-        if hasattr(self, "archive_view_nfo_tooltip"):
-            self.archive_view_nfo_tooltip.set_text("Select an album before viewing NFO.")
-        self._update_archive_operation_enablement({}, {})
+        for attr in (f"{target}_integrity_text", f"{target}_integrity_tab_text"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                self._set_text_widget(widget, empty_text)
+        relationships = getattr(self, f"{target}_relationships_text", None)
+        if relationships is not None:
+            self._set_text_widget(relationships, "Select a release to view related albums.")
+        files = getattr(self, f"{target}_files_text", None)
+        if files is not None:
+            self._set_text_widget(files, "Select a release to view filesystem evidence.")
+        nfo = getattr(self, f"{target}_nfo_text", None)
+        if nfo is not None:
+            self._set_text_widget(nfo, "Select a release to view NFO evidence.")
+        setattr(self, f"{target}_current_nfo", {})
+        if target == "archive":
+            self.archive_current_tracklist = {}
+        view_nfo_button = getattr(self, f"{target}_view_nfo_button", None)
+        if view_nfo_button is not None:
+            view_nfo_button.config(state="disabled")
+        view_nfo_tooltip = getattr(self, f"{target}_view_nfo_tooltip", None)
+        if view_nfo_tooltip is not None:
+            view_nfo_tooltip.set_text("Select an album before viewing NFO.")
+        if target == "archive":
+            self._update_archive_operation_enablement({}, {})
 
     def _update_archive_header(self, details: dict, workspace: dict):
         artist = str(details.get("artist") or "Unknown artist")
@@ -1868,35 +1943,8 @@ class DeezerCuratorGUI(tk.Tk):
         self.set_library_detail(self.library_selected_album)
 
     def set_library_detail(self, details: dict):
-        workspace = album_workspace(details, load_json(DATA_DIR / "metadata_cache.json"), getattr(self, "library_data", {}).get("albums", []))
-        presentation = workspace.get("presentation", {})
-        sections = presentation.get("sections", {})
-        for (section_id, field), label in self.library_presentation_labels.items():
-            value = ""
-            for item_field, item_value in sections.get(section_id, []):
-                if item_field == field:
-                    value = item_value
-                    break
-            label.config(text=str(value or ""))
-        for field, value in workspace.get("status_glance", []):
-            if field in self.library_status_glance_labels:
-                self.library_status_glance_labels[field].config(text=str(value or "Unknown"))
-        self._set_library_thumbnail(workspace.get("cover", {}))
-        self._set_text_widget(self.library_integrity_text, self._format_integrity(workspace.get("integrity", {})))
-        self._set_text_widget(self.library_relationships_text, workspace.get("relationships_text", ""))
-        files = workspace.get("files", {})
-        self._set_text_widget(
-            self.library_files_text,
-            f"Source: {files.get('source', 'missing')}\nPath: {files.get('path', '')}\n\n"
-            + "\n".join(files.get("items", [])),
-        )
-        nfo = workspace.get("nfo", {})
-        self.library_current_nfo = nfo
-        self.library_view_nfo_button.config(state="normal" if nfo.get("path") else "disabled")
-        self._set_text_widget(
-            self.library_nfo_text,
-            f"Status: {nfo.get('status', 'Missing')}\nPath: {nfo.get('path', '')}",
-        )
+        canonical, _workspace = self.update_album_workspace("library", details)
+        self.library_selected_album = canonical
 
     def _set_library_thumbnail(self, thumbnail: dict):
         self.library_thumbnail_image = self._set_album_cover(

@@ -185,6 +185,36 @@ class CanonicalAlbumResolverTests(unittest.TestCase):
         self.assertEqual(integrity["playlist"]["status"], "Present")
         self.assertEqual(integrity["audio_files"]["status"], "Present")
 
+    def test_archive_and_library_refs_render_identical_workspace_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            album_dir = Path(tmp) / "Alpha Artist - Cached Album"
+            album_dir.mkdir()
+            (album_dir / "01.flac").write_bytes(b"audio")
+            (album_dir / "release.nfo").write_text("nfo", encoding="utf-8")
+            (album_dir / "release.sfv").write_text("01.flac 00000000", encoding="utf-8")
+            (album_dir / "album.m3u8").write_text("#EXTM3U\n01.flac\n", encoding="utf-8")
+            (album_dir / "cover.jpg").write_bytes(b"cover")
+            (album_dir / "STIGMA_VALIDATED.txt").write_text("validated", encoding="utf-8")
+
+            archive_registry = {"albums": [self.archive_row(str(album_dir))]}
+            resolver = CanonicalAlbumResolver(
+                archive_registry=archive_registry,
+                identity_registry=self.identity(),
+                lifecycle_registry=self.lifecycle(),
+                metadata_cache=self.metadata(),
+            )
+
+            archive_album = resolver.resolve({"archive_path": str(album_dir)}).details
+            library_album = resolver.resolve({"album_id": "42", "artist": "Alpha Artist", "title": "Cached Album"}).details
+            archive_workspace = album_workspace(archive_album, self.metadata(), [archive_album])
+            library_workspace = album_workspace(library_album, self.metadata(), [archive_album])
+
+        for key in ("cover", "files", "nfo", "tracklist", "status_glance", "relationships_text"):
+            self.assertEqual(library_workspace[key], archive_workspace[key])
+        self.assertEqual(library_workspace["presentation"], archive_workspace["presentation"])
+        self.assertEqual(library_workspace["integrity"]["checks"], archive_workspace["integrity"]["checks"])
+        self.assertEqual(library_album["archive_path"], archive_album["archive_path"])
+
 
 if __name__ == "__main__":
     unittest.main()
