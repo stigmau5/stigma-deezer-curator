@@ -206,9 +206,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_album_rows: list[dict] = []
         self.library_summary_labels: dict[str, ttk.Label] = {}
         self.library_selected_album: dict = {}
-        self.library_operation_result_var = tk.StringVar()
-        self.library_presentation_labels: dict[tuple[str, str], ttk.Label] = {}
-        self.library_thumbnail_image = None
+        self.library_operation_result_var = tk.StringVar(value="Select a catalog album to open the shared workspace.")
         self.artwork_rows: list[dict] = []
         self.filtered_artwork_rows: list[dict] = []
         self.artwork_artist_var = tk.StringVar()
@@ -231,7 +229,6 @@ class DeezerCuratorGUI(tk.Tk):
         self._archive_revalidation_running = False
         self.archive_current_nfo: dict = {}
         self.archive_current_tracklist: dict = {}
-        self.library_current_nfo: dict = {}
         self.processing_queue = load_processing_queue(PROCESSING_QUEUE_FILE)
         self.processing_queue_rows: list[dict] = []
         self.closed_loop_rows: list[dict] = []
@@ -353,8 +350,9 @@ class DeezerCuratorGUI(tk.Tk):
         physical_archive_tab = ttk.Frame(self.archive_sections, padding=6)
         self.archive_sections.add(physical_archive_tab, text="Physical Archive")
         library_tab = ttk.Frame(self.archive_sections, padding=6)
-        self.archive_sections.add(library_tab, text="Library")
+        self.archive_sections.add(library_tab, text="Catalog")
         self.library_tab = library_tab
+        self.catalog_tab = library_tab
         artwork_tab = ttk.Frame(self.archive_sections, padding=6)
         self.archive_sections.add(artwork_tab, text="Artwork")
 
@@ -460,7 +458,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.status.pack(side="right")
 
         self._build_archive_tab(physical_archive_tab)
-        self._build_library_tab(library_tab)
+        self._build_catalog_tab(library_tab)
         self._build_artwork_tab(artwork_tab)
         self._build_audio_dashboard(maintenance_tab)
         self._build_settings_tab(settings_tab)
@@ -491,7 +489,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.save_layout_state()
         self.destroy()
 
-    def _build_library_tab(self, parent):
+    def _build_catalog_tab(self, parent):
         summary = ttk.Frame(parent)
         summary.pack(fill="x", pady=(0, 8))
         for key, label in (
@@ -532,24 +530,14 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_album_tree.bind("<<TreeviewSelect>>", self.on_library_album_selected)
         self.library_album_tree.bind("<Button-3>", self.show_library_album_menu)
 
-        detail_frame = ttk.Frame(panes, padding=4)
-        panes.add(detail_frame, weight=4)
-        ttk.Label(detail_frame, text="Album Details").pack(anchor="w")
-        self.library_detail_container = ttk.Frame(detail_frame)
-        self.library_detail_container.pack(fill="both", expand=True)
-        self._build_library_detail_sections(self.library_detail_container)
-
-        status_frame = ttk.LabelFrame(detail_frame, text="Album Operations", padding=6)
-        status_frame.pack(fill="x", pady=(8, 0))
-        buttons = ttk.Frame(status_frame)
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Revalidate", command=lambda: self.run_library_album_operation("revalidate_album")).pack(side="left")
-        ttk.Button(buttons, text="Generate NFO", command=lambda: self.run_library_album_operation("generate_nfo")).pack(side="left", padx=(6, 0))
-        ttk.Button(buttons, text="Generate SFV", command=lambda: self.run_library_album_operation("generate_sfv")).pack(side="left", padx=(6, 0))
-        ttk.Button(buttons, text="Open Folder", command=lambda: self.run_library_album_operation("open_album_folder")).pack(side="left", padx=(6, 0))
-        ttk.Button(buttons, text="Play Album", command=lambda: self.run_library_album_playback("play_album")).pack(side="left", padx=(6, 0))
-        ttk.Button(buttons, text="Play Playlist", command=lambda: self.run_library_album_playback("play_playlist")).pack(side="left", padx=(6, 0))
-        ttk.Label(status_frame, textvariable=self.library_operation_result_var).pack(anchor="w", pady=(6, 0))
+        detail_frame = ttk.LabelFrame(panes, text="Catalog Selection", padding=8)
+        panes.add(detail_frame, weight=2)
+        ttk.Label(
+            detail_frame,
+            text="Catalog is an entry point. Album evidence opens in the shared Archive Workspace.",
+            wraplength=360,
+        ).pack(anchor="w", fill="x")
+        ttk.Label(detail_frame, textvariable=self.library_operation_result_var, wraplength=360).pack(anchor="w", fill="x", pady=(8, 0))
 
         self.refresh_library()
 
@@ -865,81 +853,6 @@ class DeezerCuratorGUI(tk.Tk):
             self.artwork_tree.column(column, width=width, anchor="w")
         self.artwork_tree.pack(fill="both", expand=True)
         ttk.Label(parent, textvariable=self.artwork_status_var).pack(anchor="w", pady=(8, 0))
-
-    def _build_library_detail_sections(self, parent):
-        workspace = ttk.Panedwindow(parent, orient="vertical")
-        workspace.pack(fill="both", expand=True)
-        self.layout_panes["library_workspace"] = workspace
-
-        top = ttk.Frame(workspace)
-        workspace.add(top, weight=1)
-        cover_box = ttk.Frame(top, width=320, height=260)
-        cover_box.pack(side="left", fill="y", padx=(0, 10))
-        cover_box.pack_propagate(False)
-        self.library_thumbnail = tk.Label(cover_box, text="No artwork", anchor="center", relief="sunken", bg="white")
-        self.library_thumbnail.pack(fill="both", expand=True)
-        album_header = ttk.Frame(top)
-        album_header.pack(side="left", fill="both", expand=True)
-        self.library_artwork_status = ttk.Label(album_header, text="Artwork: Unknown", wraplength=480)
-        self.library_artwork_status.pack(anchor="w", pady=(0, 8))
-
-        status = ttk.LabelFrame(album_header, text="Archive Status", padding=6)
-        status.pack(fill="x")
-        self.library_status_glance_labels: dict[str, ttk.Label] = {}
-        for idx, field in enumerate(("Validation", "NFO", "SFV", "Playlist", "Artwork", "Readiness", "Health")):
-            ttk.Label(status, text=f"{field}:").grid(row=idx // 2, column=(idx % 2) * 2, sticky="w", padx=(0, 6), pady=1)
-            value = ttk.Label(status, text="Unknown")
-            value.grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=1)
-            self.library_status_glance_labels[field] = value
-
-        integrity = ttk.LabelFrame(album_header, text="Album Integrity", padding=6)
-        integrity.pack(fill="x", pady=(8, 0))
-        self.library_integrity_text = tk.Text(integrity, height=9, wrap="word", font="TkFixedFont")
-        self.library_integrity_text.pack(fill="x")
-        self.library_integrity_text.config(state="disabled")
-
-        middle = ttk.Panedwindow(workspace, orient="horizontal")
-        workspace.add(middle, weight=1)
-        for section_id, title, fields in (
-            ("overview", "Overview", ("Album title", "Artist", "Year", "Record type", "Lifecycle state", "Lifecycle evidence", "Lifecycle reason")),
-            ("metadata", "Metadata", ("Label", "Genre", "Release date", "Track count", "Contributors", "Metadata status", "Cached fields", "Missing fields")),
-            ("identity", "Identity", ("Album ID", "Identity confidence", "Archive path confidence", "Archive folder", "Archive path")),
-        ):
-            frame = ttk.LabelFrame(middle, text=title, padding=6)
-            middle.add(frame, weight=1)
-            for row, field in enumerate(fields):
-                ttk.Label(frame, text=f"{field}:").grid(row=row, column=0, sticky="nw", padx=(0, 6), pady=1)
-                value = ttk.Label(frame, text="", wraplength=420)
-                value.grid(row=row, column=1, sticky="ew", pady=1)
-                frame.columnconfigure(1, weight=1)
-                self.library_presentation_labels[(section_id, field)] = value
-                if section_id == "identity" and field == "Archive path":
-                    self.library_path_label = value
-                    self.library_path_tooltip = Tooltip(value)
-        related_frame = ttk.LabelFrame(middle, text="Related Albums", padding=6)
-        middle.add(related_frame, weight=1)
-        self.library_relationships_text = tk.Text(related_frame, height=10, wrap="word", font="TkFixedFont")
-        self.library_relationships_text.pack(fill="both", expand=True)
-        self.library_relationships_text.config(state="disabled")
-
-        evidence = ttk.Panedwindow(workspace, orient="horizontal")
-        workspace.add(evidence, weight=4)
-        self.layout_panes["library_evidence"] = evidence
-        files_frame = ttk.LabelFrame(evidence, text="Files", padding=6)
-        evidence.add(files_frame, weight=1)
-        self.library_files_text = self._build_scrolled_text(files_frame)
-        self.library_files_text.config(state="disabled")
-
-        nfo_frame = ttk.LabelFrame(evidence, text="NFO", padding=6)
-        evidence.add(nfo_frame, weight=1)
-        self.library_view_nfo_button = ttk.Button(
-            nfo_frame,
-            text="View NFO",
-            command=lambda: self.show_nfo_viewer(self.library_current_nfo, self.library_selected_album),
-        )
-        self.library_view_nfo_button.pack(anchor="w", pady=(0, 6))
-        self.library_nfo_text = self._build_scrolled_text(nfo_frame)
-        self.library_nfo_text.config(state="disabled")
 
     def refresh_library(self):
         if not hasattr(self, "library_artist_list"):
@@ -1460,9 +1373,9 @@ class DeezerCuratorGUI(tk.Tk):
         row = self._select_tree_row_at_event(self.library_album_tree, self.library_album_rows, event)
         if row:
             details = album_details(self.library_data, row.get("album_id", "")) or row
-            self.library_selected_album = details
-            self.set_library_detail(details)
-            self._show_context_menu(event, details, source="library")
+            canonical = self.resolve_canonical_album(details).details or details
+            self.library_selected_album = canonical
+            self._show_context_menu(event, canonical, source="library")
 
     def _select_tree_row_at_event(self, tree, rows: list[dict], event) -> dict:
         item = tree.identify_row(event.y)
@@ -1584,7 +1497,7 @@ class DeezerCuratorGUI(tk.Tk):
         if source == "library":
             previous = self.library_selected_album
             self.library_selected_album = row
-            self.run_library_album_operation("revalidate_album")
+            self.run_catalog_album_operation("revalidate_album")
             self.library_selected_album = previous
             return
         self.archive_selected_album = self.resolve_archive_workspace_album(row)
@@ -1910,7 +1823,7 @@ class DeezerCuratorGUI(tk.Tk):
         self.library_selected_album = {}
         for item in self.library_album_tree.get_children():
             self.library_album_tree.delete(item)
-        self.set_library_detail({})
+        self.library_operation_result_var.set("Select a catalog album to open the shared workspace.")
 
     def on_library_artist_selected(self, event=None):
         selection = self.library_artist_list.curselection()
@@ -1932,26 +1845,51 @@ class DeezerCuratorGUI(tk.Tk):
                     album.get("validation_status") or "",
                 ),
             )
-        self.set_library_detail({})
+        self.library_selected_album = {}
+        self.library_operation_result_var.set("Select a catalog album to open the shared workspace.")
 
     def on_library_album_selected(self, event=None):
         selection = self.library_album_tree.selection()
         if not selection:
             return
         album = self.library_album_rows[int(selection[0])]
-        self.library_selected_album = album_details(self.library_data, album["album_id"])
-        self.set_library_detail(self.library_selected_album)
+        details = album_details(self.library_data, album["album_id"])
+        self.activate_catalog_album(details)
 
     def set_library_detail(self, details: dict):
-        canonical, _workspace = self.update_album_workspace("library", details)
-        self.library_selected_album = canonical
+        self.set_catalog_detail(details)
 
-    def _set_library_thumbnail(self, thumbnail: dict):
-        self.library_thumbnail_image = self._set_album_cover(
-            self.library_thumbnail,
-            self.library_artwork_status,
-            thumbnail,
+    def set_catalog_detail(self, details: dict):
+        self.activate_catalog_album(details)
+
+    def activate_catalog_album(self, details: dict):
+        if not details:
+            self.library_selected_album = {}
+            self.library_operation_result_var.set("Select a catalog album to open the shared workspace.")
+            return
+        canonical = self.resolve_canonical_album(details).details or details
+        self.library_selected_album = canonical
+        self.archive_selected_album = canonical
+        self.active_archive_album = active_album_from_row(canonical)
+        if hasattr(self, "archive_tab"):
+            self.tabs.select(self.archive_tab)
+        if hasattr(self, "archive_sections") and self.archive_sections.tabs():
+            self.archive_sections.select(self.archive_sections.tabs()[0])
+        self._focus_archive_album_if_visible(canonical)
+        self.set_archive_detail(canonical)
+        self.library_operation_result_var.set(
+            f"Opened shared workspace: {canonical.get('artist', '')} - {canonical.get('title', '')}".strip(" -")
         )
+
+    def _focus_archive_album_if_visible(self, album: dict):
+        if not hasattr(self, "archive_tree") or not hasattr(self, "archive_album_tree"):
+            return
+        artist_key = album.get("artist_key", "")
+        artist_iid = f"artist:{artist_key}"
+        if self.archive_tree.exists(artist_iid):
+            self.archive_tree.selection_set(artist_iid)
+            self.archive_tree.see(artist_iid)
+            self._load_archive_artist_albums(artist_key, self._archive_album_key(album), None, active_album_from_row(album))
 
     def _set_album_cover(self, label: tk.Label, status_label: ttk.Label, thumbnail: dict):
         return CoverWidget(label, status_label).render(thumbnail)
@@ -2076,13 +2014,10 @@ class DeezerCuratorGUI(tk.Tk):
             return
         details = album_details(self.library_data, row.get("album_id", ""))
         if not details:
-            self.artwork_status_var.set("Selected album is not available in Library data.")
+            self.artwork_status_var.set("Selected album is not available in Catalog data.")
             return
-        self.tabs.select(self.archive_tab)
-        self.archive_sections.select(self.library_tab)
-        self.library_selected_album = details
-        self.set_library_detail(details)
-        self.artwork_status_var.set("Opened album details.")
+        self.activate_catalog_album(details)
+        self.artwork_status_var.set("Opened shared album workspace.")
 
     def open_selected_artwork_folder(self):
         row = self.selected_artwork_row()
@@ -2098,23 +2033,32 @@ class DeezerCuratorGUI(tk.Tk):
         self.artwork_status_var.set(f"{result['result'].title()}: {result['message']}")
 
     def run_library_album_operation(self, operation_id: str):
-        target, reason = album_archive_operation_target(self.library_selected_album)
+        self.run_catalog_album_operation(operation_id)
+
+    def run_catalog_album_operation(self, operation_id: str):
+        canonical = self.resolve_canonical_album(self.library_selected_album).details or self.library_selected_album
+        self.library_selected_album = canonical
+        target, reason = album_archive_operation_target(canonical)
         if not target:
             self.library_operation_result_var.set(f"Failure: {reason}")
             return
-        album_id = self.library_selected_album.get("album_id", "")
+        album_id = canonical.get("album_id", "")
         result = run_operation(operation_id, target, self.audio_settings, OPERATION_HISTORY_FILE)
         self.library_operation_result_var.set(f"{result['result'].title()}: {result['message']}")
         self.refresh_library()
         if hasattr(self, "archive_tree"):
             self.refresh_archive_browser()
         if album_id:
-            self.library_selected_album = album_details(self.library_data, album_id)
-            self.set_library_detail(self.library_selected_album)
+            self.activate_catalog_album(album_details(self.library_data, album_id) or canonical)
         self.refresh_audio_dashboard()
 
     def run_library_album_playback(self, operation_id: str):
-        target, reason = album_archive_operation_target(self.library_selected_album)
+        self.run_catalog_album_playback(operation_id)
+
+    def run_catalog_album_playback(self, operation_id: str):
+        canonical = self.resolve_canonical_album(self.library_selected_album).details or self.library_selected_album
+        self.library_selected_album = canonical
+        target, reason = album_archive_operation_target(canonical)
         if not target:
             self.library_operation_result_var.set(f"Failure: {reason}")
             return
